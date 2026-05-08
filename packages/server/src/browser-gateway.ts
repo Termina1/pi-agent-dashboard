@@ -15,7 +15,44 @@ import { createHeadlessPidRegistry, type HeadlessPidRegistry } from "./headless-
 import type { PendingForkRegistry } from "./pending-fork-registry.js";
 import type { SessionOrderManager } from "./session-order-manager.js";
 import type { PreferencesStore } from "./preferences-store.js";
-import type { DirectoryService } from "./directory-service.js";
+import { hasOpenSpecDir, type DirectoryService } from "./directory-service.js";
+
+/**
+ * Pure helper: build the per-cwd `openspec_update` messages a freshly
+ * connecting browser should receive. One message per known cwd.
+ * Disambiguates three states:
+ *   - cache populated         → cached payload
+ *   - openspec dir but cold   → { initialized: false, pending: true }
+ *   - no openspec dir         → { initialized: false, pending: false }
+ *
+ * Exported so cold-boot snapshot semantics can be unit-tested without
+ * spinning up a WS server. See change: fix-cold-boot-openspec-protocol.
+ */
+export function buildOpenSpecConnectSnapshot(
+  directoryService: Pick<DirectoryService, "knownDirectories" | "getOpenSpecData">,
+  hasDir: (cwd: string) => boolean,
+): Array<ServerToBrowserMessage> {
+  const out: Array<ServerToBrowserMessage> = [];
+  for (const cwd of directoryService.knownDirectories()) {
+    const cached = directoryService.getOpenSpecData(cwd);
+    if (cached && cached.initialized) {
+      out.push({ type: "openspec_update", cwd, data: cached });
+    } else if (hasDir(cwd)) {
+      out.push({
+        type: "openspec_update",
+        cwd,
+        data: { initialized: false, pending: true, changes: [] },
+      });
+    } else {
+      out.push({
+        type: "openspec_update",
+        cwd,
+        data: { initialized: false, pending: false, changes: [] },
+      });
+    }
+  }
+  return out;
+}
 import { createPendingResumeRegistry, type PendingResumeRegistry } from "./pending-resume-registry.js";
 import { createViewedSessionTracker, type ViewedSessionTracker } from "./viewed-session-tracker.js";
 import type { TerminalManager } from "./terminal-manager.js";
@@ -31,7 +68,7 @@ import { handlePinDirectory, handleUnpinDirectory, handleReorderPinnedDirs, hand
 export interface BrowserGateway {
   wss: WebSocketServer;
   broadcastEvent(sessionId: string, seq: number, event: any): void;
-  broadcastSessionAdded(session: any): void;
+  broadcastSessionAdded(session: any, opts?: { spawnRequestId?: string }): void;
   broadcastSessionUpdated(sessionId: string, updates: any): void;
   broadcastSessionRemoved(sessionId: string): void;
   sendToSubscribers(sessionId: string, msg: ServerToBrowserMessage): void;
@@ -82,6 +119,7 @@ export function createBrowserGateway(
   maxWsBufferBytes?: number,
   pendingAttachRegistry?: import("./pending-attach-registry.js").PendingAttachRegistry,
   pendingResumeIntents?: import("./pending-resume-intent-registry.js").PendingResumeIntentRegistry,
+  pendingClientCorrelations?: import("./pending-client-correlations.js").PendingClientCorrelations,
 ): BrowserGateway {
   const wss = new WebSocketServer({ noServer: true });
 
@@ -230,13 +268,12 @@ export function createBrowserGateway(
       sendTo(ws, { type: "pinned_dirs_updated", paths: preferencesStore.getPinnedDirectories() });
     }
 
-    // Send cached OpenSpec data for all known directories
+    // Send OpenSpec data for every known directory — exactly one
+    // `openspec_update` per cwd, never silently omit.
+    // See change: fix-cold-boot-openspec-protocol.
     if (directoryService) {
-      for (const cwd of directoryService.knownDirectories()) {
-        const data = directoryService.getOpenSpecData(cwd);
-        if (data && data.initialized) {
-          sendTo(ws, { type: "openspec_update", cwd, data });
-        }
+      for (const msg of buildOpenSpecConnectSnapshot(directoryService, hasOpenSpecDir)) {
+        sendTo(ws, msg);
       }
     }
 
@@ -271,6 +308,7 @@ export function createBrowserGateway(
           headlessPidRegistry, pendingResumeRegistry, pendingDashboardSpawns,
           pendingAttachRegistry,
           pendingResumeIntents,
+          pendingClientCorrelations,
           sendTo, broadcast, getSubscribers, replayPendingUiRequests,
           trackUiRequest: trackUiRequest,
           markReplaying(targetWs, sessionId) {
@@ -538,8 +576,15 @@ export function createBrowserGateway(
       }
     },
 
-    broadcastSessionAdded(session: any) {
-      broadcast({ type: "session_added", session });
+    broadcastSessionAdded(session: any, opts?: { spawnRequestId?: string }) {
+      // Carry the originating client `requestId` (when known) so the
+      // browser can auto-select / dismiss its placeholder by exact
+      // correlation. See change: spawn-correlation-token.
+      broadcast({
+        type: "session_added",
+        session,
+        ...(opts?.spawnRequestId ? { spawnRequestId: opts.spawnRequestId } : {}),
+      });
     },
 
     broadcastSessionUpdated(sessionId: string, updates: any) {

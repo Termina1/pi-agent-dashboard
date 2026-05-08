@@ -124,13 +124,19 @@ try {
       ? path.join("node_modules", "npm", "bin", "npm-cli.js")
       : path.join("lib", "node_modules", "npm", "bin", "npm-cli.js"),
   );
-  const targetMatchesHost = TARGET_OS === process.platform;
+  // Both OS *and* CPU must match: an arm64 node.exe cannot execute on x64
+  // Windows (CreateProcessW → ERROR_BAD_EXE_FORMAT → libuv UNKNOWN errno=-4094
+  // with empty stderr/stdout). Cross-arch builds on `windows-latest` (x64
+  // hardware, arm64 target) MUST fall back to system npm even though the OSes
+  // match. See run 25410899936 win32-arm64 leg.
+  const targetMatchesHost =
+    TARGET_OS === process.platform && TARGET_CPU === process.arch;
   const useBundledNpm = targetMatchesHost && existsSync(bundledNodeExe) && existsSync(bundledNpmCli);
   if (useBundledNpm) {
     console.log(`  using bundled npm: ${bundledNodeExe} ${bundledNpmCli}`);
   } else if (existsSync(bundledNodeExe) && !targetMatchesHost) {
     console.log(
-      `  bundled npm present but target=${TARGET_OS} ≠ host=${process.platform}; using system npm`,
+      `  bundled npm present but target=${TARGET_OS}-${TARGET_CPU} ≠ host=${process.platform}-${process.arch}; using system npm`,
     );
     console.log(
       `  (cache integrity hashes are universal, but cache keys may differ from runtime npm — build on matching host or in Docker for parity)`,
@@ -166,10 +172,28 @@ try {
     },
   );
   if (npmInstall.status !== 0) {
+    // Surface every signal spawnSync exposes — empty stderr+stdout alone
+    // (which is what we hit on win32-x64 + win32-arm64 runners, see
+    // https://github.com/BlackBeltTechnology/pi-agent-dashboard/actions/runs/25410379440)
+    // is meaningless without status / signal / error.code. Print them all
+    // so the next CI run tells us which branch failed (ENOENT vs exec
+    // format error vs npm crash vs long-path violation vs ...).
     console.error("✗ npm install failed:");
-    const log = (npmInstall.stderr || "") + (npmInstall.stdout || "");
-    const lines = log.trim().split(/\r?\n/);
-    console.error(lines.slice(-20).join("\n"));
+    console.error(`  cmd    : ${npmSpawnCmd} ${npmSpawnArgs.join(" ")}`);
+    console.error(`  status : ${npmInstall.status}`);
+    console.error(`  signal : ${npmInstall.signal}`);
+    if (npmInstall.error) {
+      console.error(
+        `  error  : code=${npmInstall.error.code} errno=${npmInstall.error.errno} syscall=${npmInstall.error.syscall}`,
+      );
+      console.error(`  message: ${npmInstall.error.message}`);
+    } else {
+      console.error("  error  : (none)");
+    }
+    const stderrTxt = (npmInstall.stderr || "").trim();
+    const stdoutTxt = (npmInstall.stdout || "").trim();
+    console.error(`  stderr : ${stderrTxt ? "\n" + stderrTxt : "(empty)"}`);
+    console.error(`  stdout : ${stdoutTxt ? "\n" + stdoutTxt : "(empty)"}`);
     process.exit(1);
   }
 

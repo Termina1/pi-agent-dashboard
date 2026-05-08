@@ -98,6 +98,33 @@ describe("SessionCard", () => {
     expect(screen.queryByText("feature/test")).toBeNull();
   });
 
+  it("shows red dot when hasError", () => {
+    const session = makeSession({ status: "active" });
+    const { container } = render(
+      <SessionCard session={session} {...defaultProps} hasError={true} />,
+    );
+    expect(container.querySelector(".bg-red-500")).toBeTruthy();
+  });
+
+  it("shows amber pulsing dot when isRetrying without lastError", () => {
+    const session = makeSession({ status: "active" });
+    const { container } = render(
+      <SessionCard session={session} {...defaultProps} isRetrying={true} />,
+    );
+    const dot = container.querySelector(".bg-amber-500");
+    expect(dot).toBeTruthy();
+    expect(dot!.className).toContain("animate-pulse");
+  });
+
+  it("red error dot wins over amber retry dot", () => {
+    const session = makeSession({ status: "active" });
+    const { container } = render(
+      <SessionCard session={session} {...defaultProps} hasError={true} isRetrying={true} />,
+    );
+    expect(container.querySelector(".bg-red-500")).toBeTruthy();
+    expect(container.querySelector(".bg-amber-500")).toBeNull();
+  });
+
   it("should show ended status for ended sessions", () => {
     const session = makeSession({ status: "ended" });
     const { container } = render(<SessionCard session={session} {...defaultProps} />);

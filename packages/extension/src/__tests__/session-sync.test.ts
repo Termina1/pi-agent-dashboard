@@ -133,3 +133,75 @@ describe("handleSessionChange", () => {
     expect(registerMsg.registerReason).toBe("spawn");
   });
 });
+
+// See change: spawn-correlation-token — bridge token inclusion contract.
+describe("sendStateSync: spawnToken from env", () => {
+  const ENV_VAR = "PI_DASHBOARD_SPAWN_TOKEN";
+
+  function withEnvVar<T>(value: string | undefined, fn: () => T): T {
+    const prior = process.env[ENV_VAR];
+    if (value === undefined) delete process.env[ENV_VAR];
+    else process.env[ENV_VAR] = value;
+    try {
+      return fn();
+    } finally {
+      if (prior === undefined) delete process.env[ENV_VAR];
+      else process.env[ENV_VAR] = prior;
+    }
+  }
+
+  it("first register includes spawnToken from env", () => {
+    withEnvVar("tok_first", () => {
+      const bc = createMockBridgeContext({ hasRegisteredOnce: false } as any);
+      sendStateSync(bc, () => []);
+      const sent = (bc as any)._sent;
+      const registerMsg = sent.find((m: any) => m.type === "session_register");
+      expect(registerMsg.spawnToken).toBe("tok_first");
+      expect(registerMsg.registerReason).toBe("spawn");
+    });
+  });
+
+  it("reattach register omits spawnToken (even when env still set)", () => {
+    withEnvVar("tok_first", () => {
+      const bc = createMockBridgeContext({ hasRegisteredOnce: true } as any);
+      sendStateSync(bc, () => []);
+      const sent = (bc as any)._sent;
+      const registerMsg = sent.find((m: any) => m.type === "session_register");
+      expect(registerMsg.spawnToken).toBeUndefined();
+      expect(registerMsg.registerReason).toBe("reattach");
+    });
+  });
+
+  it("first register without env var omits spawnToken", () => {
+    withEnvVar(undefined, () => {
+      const bc = createMockBridgeContext({ hasRegisteredOnce: false } as any);
+      sendStateSync(bc, () => []);
+      const sent = (bc as any)._sent;
+      const registerMsg = sent.find((m: any) => m.type === "session_register");
+      expect(registerMsg.spawnToken).toBeUndefined();
+      expect(registerMsg.registerReason).toBe("spawn");
+    });
+  });
+
+  it("handleSessionChange register omits spawnToken (in-process new/fork/resume)", () => {
+    withEnvVar("tok_first", () => {
+      const bc = createMockBridgeContext({ hasRegisteredOnce: true } as any);
+      const ctx = {
+        cwd: "/proj",
+        sessionManager: {
+          getSessionId: () => "sess-fork",
+          getSessionFile: () => "/path/new.json",
+          getSessionDir: () => "/path",
+          getBranch: () => [],
+          getEntries: () => [],
+        },
+      };
+      handleSessionChange(bc, ctx as any, () => []);
+      const sent = (bc as any)._sent;
+      const registerMsg = sent.find((m: any) => m.type === "session_register" && m.sessionId === "sess-fork");
+      expect(registerMsg).toBeDefined();
+      expect(registerMsg.spawnToken).toBeUndefined();
+      expect(registerMsg.registerReason).toBe("spawn");
+    });
+  });
+});

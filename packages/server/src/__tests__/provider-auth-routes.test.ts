@@ -114,7 +114,14 @@ describe("provider-auth-routes", () => {
 
   // /exchange endpoint removed — token exchange happens in the callback server's onCode
 
-  it("PUT /api/provider-auth/api-key saves and notifies bridges and browsers", async () => {
+  // notifyBridges semantics changed: it now ONLY broadcasts
+  // `credentials_updated` to bridges. The previous `models_refreshed`
+  // broadcast to browsers was removed because the per-session
+  // `models_list` channel is self-healing: each bridge pushes a fresh
+  // models_list for its session on credentials_updated, and browsers
+  // update modelsMap[sid] incrementally without a global wipe. See
+  // change: simplify-model-selection-channels.
+  it("PUT /api/provider-auth/api-key saves and broadcasts credentials_updated to bridges", async () => {
     const { writeCredential } = await import("../provider-auth-storage.js");
     const res = await app.inject({
       method: "PUT",
@@ -125,10 +132,11 @@ describe("provider-auth-routes", () => {
     expect(JSON.parse(res.payload).ok).toBe(true);
     expect(writeCredential).toHaveBeenCalledWith("openai", { type: "api_key", key: "sk-test" });
     expect(piGateway.broadcast).toHaveBeenCalledWith({ type: "credentials_updated" });
-    expect(browserGateway.broadcastToAll).toHaveBeenCalledWith({ type: "models_refreshed" });
+    // No models_refreshed broadcast — see simplify-model-selection-channels.
+    expect(browserGateway.broadcastToAll).not.toHaveBeenCalledWith({ type: "models_refreshed" });
   });
 
-  it("DELETE /api/provider-auth/:provider removes and notifies bridges and browsers", async () => {
+  it("DELETE /api/provider-auth/:provider removes and broadcasts credentials_updated", async () => {
     const { removeCredential } = await import("../provider-auth-storage.js");
     const res = await app.inject({
       method: "DELETE",
@@ -137,7 +145,7 @@ describe("provider-auth-routes", () => {
     expect(res.statusCode).toBe(200);
     expect(removeCredential).toHaveBeenCalledWith("anthropic");
     expect(piGateway.broadcast).toHaveBeenCalledWith({ type: "credentials_updated" });
-    expect(browserGateway.broadcastToAll).toHaveBeenCalledWith({ type: "models_refreshed" });
+    expect(browserGateway.broadcastToAll).not.toHaveBeenCalledWith({ type: "models_refreshed" });
   });
 
   // /callback/:provider route removed — temp callback server handles this directly

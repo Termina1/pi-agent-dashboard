@@ -12,6 +12,7 @@ import { killProcessByPgid } from "./process-scanner.js";
 import type { FileEntry, PiSessionInfo } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 import { filterHiddenCommands } from "./bridge-context.js";
 import { expandPromptTemplateFromDisk } from "./prompt-expander.js";
+import { buildProviderCatalogue } from "./provider-register.js";
 
 const IGNORE_DIRS = new Set([".git", "node_modules", ".next", "dist", "build", ".cache", "__pycache__", ".venv"]);
 const MAX_RESULTS = 20;
@@ -160,6 +161,11 @@ export function createCommandHandler(
     getThinkingLevel?: () => string | undefined;
     shutdown?: () => void;
     abort?: () => void;
+    /**
+     * Probe agent idleness for the persistent-abort scheduler.
+     * See change: fix-provider-retry-infinite-loop.
+     */
+    isIdle?: () => boolean;
     getCwd?: () => string;
     /** Callback to send events (e.g., bash_output, command_feedback) back to server */
     eventSink?: (msg: ExtensionToServerMessage) => void;
@@ -176,6 +182,33 @@ export function createCommandHandler(
   },
 ): CommandHandler {
   const getSessionId = typeof sessionIdOrGetter === "function" ? sessionIdOrGetter : () => sessionIdOrGetter;
+
+  /**
+   * Persistent-abort scheduler. Re-invokes `options.abort()` at 200ms
+   * intervals for up to 2 seconds, breaking early when `options.isIdle()`
+   * returns true. Closes the retry race window in pi-coding-agent.
+   * See change: fix-provider-retry-infinite-loop.
+   */
+  const PERSISTENT_ABORT_INTERVAL_MS = 200;
+  const PERSISTENT_ABORT_MAX_MS = 2000;
+  function schedulePersistentAbort(opts: NonNullable<typeof options>): void {
+    if (!opts.abort) return;
+    const startedAt = Date.now();
+    const interval = setInterval(() => {
+      if (Date.now() - startedAt >= PERSISTENT_ABORT_MAX_MS) {
+        clearInterval(interval);
+        return;
+      }
+      try {
+        if (opts.isIdle?.()) {
+          clearInterval(interval);
+          return;
+        }
+      } catch { /* probe failure — keep trying */ }
+      try { opts.abort?.(); } catch { /* idempotent */ }
+    }, PERSISTENT_ABORT_INTERVAL_MS);
+  }
+
   return {
     async handle(msg: ServerToExtensionMessage): Promise<ExtensionToServerMessage | undefined> {
       const sessionId = getSessionId();
@@ -307,6 +340,31 @@ export function createCommandHandler(
           if (options?.abort) {
             options.abort();
           }
+          // Synthesize an immediate auto_retry_end so the dashboard clears
+          // any in-flight retry banner without waiting for pi's natural
+          // auto_retry_end (which is delayed by the abortable-sleep cancel
+          // window AND, on extension API, never reaches us at all — see
+          // https://github.com/badlogic/pi-mono/discussions/2073). The
+          // reducer no-ops auto_retry_end when retryState is undefined,
+          // so this is idempotent against later events.
+          if (options?.eventSink) {
+            options.eventSink({
+              type: "event_forward",
+              sessionId,
+              event: {
+                eventType: "auto_retry_end",
+                timestamp: Date.now(),
+                data: { success: false, attempt: -1, finalError: "Aborted by user" },
+              },
+            });
+          }
+          // Persistent-abort scheduler: pi-coding-agent's _retryAbortController
+          // is briefly `undefined` between sleep-end and the next
+          // agent.continue() call. An abort that arrives in that window is
+          // a no-op against the retry. Re-invoke abort every 200ms for up
+          // to 2s, breaking early when the agent is idle.
+          // See change: fix-provider-retry-infinite-loop.
+          if (options) schedulePersistentAbort(options);
           return undefined;
 
         case "request_commands": {
@@ -358,6 +416,11 @@ export function createCommandHandler(
             } catch { /* ignore */ }
           }
           return { type: "models_list", sessionId, models: [] };
+        }
+
+        case "request_providers": {
+          // See change: replace-hardcoded-provider-lists.
+          return { type: "providers_list", sessionId, providers: buildProviderCatalogue() };
         }
 
         case "set_thinking_level":

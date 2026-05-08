@@ -10,6 +10,8 @@ import { ConnectionManager } from "./connection.js";
 import { detectSessionSource } from "./source-detector.js";
 import { mapEventToProtocol } from "./event-forwarder.js";
 import { createCommandHandler } from "./command-handler.js";
+import { RetryTracker } from "./retry-tracker.js";
+import { UsageLimitOrderer } from "./usage-limit-orderer.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -27,7 +29,7 @@ import { PromptBus } from "./prompt-bus.js";
 import { DashboardDefaultAdapter } from "./dashboard-default-adapter.js";
 import { registerAskUserTool } from "./ask-user-tool.js";
 import { decodeMultiselectAnswer } from "./multiselect-decode.js";
-import { activate as activateProviderRegister, onProviderChanged, reloadProviders } from "./provider-register.js";
+import { activate as activateProviderRegister, onProviderChanged, reloadProviders, buildProviderCatalogue } from "./provider-register.js";
 import type { FlowInfo } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 import { startMetricsMonitor, stopMetricsMonitor, collectMetrics } from "./process-metrics.js";
 import { scanChildProcesses } from "./process-scanner.js";
@@ -190,6 +192,22 @@ function initBridge(pi: ExtensionAPI) {
   let lastThinkingLevel: string | undefined;
   let hasRegisteredOnce = false; // see change: reattach-move-to-front
   let promptBus: PromptBus | undefined;
+
+  // Provider-retry synthesis trackers. pi's ExtensionAPI does not expose
+  // `auto_retry_*` events, so the bridge synthesizes them from observed
+  // `message_end` / `agent_end` events. See change: fix-provider-retry-infinite-loop.
+  const retryTracker = new RetryTracker();
+  const usageLimitOrderer = new UsageLimitOrderer();
+
+  /** Forward a synthesized auto_retry_* event using the standard event_forward shape. */
+  const sendSyntheticRetryEvent = (eventType: string, data: Record<string, unknown>): void => {
+    if (!isActive() || !sessionReady) return;
+    connection.send({
+      type: "event_forward",
+      sessionId,
+      event: { eventType, timestamp: Date.now(), data },
+    });
+  };
 
   // ── Per-message entry id tracking (for fix-per-message-fork) ──
   // Pi 0.69+ awaits extension handlers BEFORE sessionManager.appendMessage runs,
@@ -421,6 +439,8 @@ function initBridge(pi: ExtensionAPI) {
               id: m.id,
             }));
             connection.send({ type: "models_list", sessionId, models });
+            // See change: replace-hardcoded-provider-lists.
+            connection.send({ type: "providers_list", sessionId, providers: buildProviderCatalogue() });
           } catch (err) { console.error("[dashboard] models_list push failed:", err); }
         }
         return;
@@ -646,6 +666,14 @@ function initBridge(pi: ExtensionAPI) {
       if (cachedCtx?.abort) {
         cachedCtx.abort();
       }
+      // Clear retry-synthesis trackers — the user-initiated abort path
+      // already synthesizes its own auto_retry_end via command-handler.
+      // See change: fix-provider-retry-infinite-loop.
+      retryTracker.noteAbort(sessionId);
+      usageLimitOrderer.noteRetryEnd(sessionId);
+    },
+    isIdle: () => {
+      try { return cachedCtx?.isIdle?.() ?? false; } catch { return false; }
     },
     eventSink: (msg) => connection.send(msg),
     compact: (opts) => {
@@ -800,7 +828,25 @@ function initBridge(pi: ExtensionAPI) {
       if (!sessionReady) return;
       // Track agent streaming state (survives reconnect/reload)
       if (eventType === "agent_start") getBridgeState().isAgentStreaming = true;
-      if (eventType === "agent_end") getBridgeState().isAgentStreaming = false;
+      if (eventType === "agent_end") {
+        getBridgeState().isAgentStreaming = false;
+        // Provider-retry synthesis: forward auto_retry_end BEFORE agent_end
+        // when retries were in flight, so the dashboard's retry banner
+        // clears before the error banner appears. The usage-limit orderer
+        // takes precedence (it carries the actual error string); the retry
+        // tracker handles the non-usage-limit case. See change:
+        // fix-provider-retry-infinite-loop.
+        const orderedSynth = usageLimitOrderer.maybeSynthesize(sessionId, (event as any));
+        if (orderedSynth) {
+          sendSyntheticRetryEvent(orderedSynth.eventType, orderedSynth.data);
+          retryTracker.noteAbort(sessionId); // clear tracker; orderer's event is authoritative
+        } else {
+          const trackerSynth = retryTracker.observeAgentEnd(sessionId, event as any);
+          if (trackerSynth) {
+            sendSyntheticRetryEvent(trackerSynth.eventType, trackerSynth.data);
+          }
+        }
+      }
       // For model_select, enrich the event data with thinkingLevel
       if (eventType === "model_select") {
         const enriched = { ...event, thinkingLevel: (pi as any).getThinkingLevel?.() };
@@ -870,6 +916,18 @@ function initBridge(pi: ExtensionAPI) {
           const enriched = { ...event, entryId, nonce };
           const protoMsg = mapEventToProtocol(sessionId, enriched);
           connection.send(protoMsg);
+          // After forwarding the original message_end, ask the retry tracker
+          // whether to synthesize an auto_retry_* event. See change:
+          // fix-provider-retry-infinite-loop.
+          const synthetic = retryTracker.observeMessageEnd(sessionId, messageRef as any);
+          if (synthetic) {
+            sendSyntheticRetryEvent(synthetic.eventType, synthetic.data);
+            if (synthetic.eventType === "auto_retry_start") {
+              usageLimitOrderer.noteRetryStart(sessionId);
+            } else {
+              usageLimitOrderer.noteRetryEnd(sessionId);
+            }
+          }
         }, 0);
         return;
       }
@@ -1258,6 +1316,8 @@ function initBridge(pi: ExtensionAPI) {
           id: m.id,
         }));
         connection.send({ type: "models_list", sessionId, models });
+        // See change: replace-hardcoded-provider-lists.
+        connection.send({ type: "providers_list", sessionId, providers: buildProviderCatalogue() });
       } catch { /* modelRegistry not available */ }
     }
 
@@ -1477,6 +1537,8 @@ function initBridge(pi: ExtensionAPI) {
           id: m.id,
         }));
         connection.send({ type: "models_list", sessionId, models });
+        // See change: replace-hardcoded-provider-lists.
+        connection.send({ type: "providers_list", sessionId, providers: buildProviderCatalogue() });
       } catch { /* ignore */ }
 
       // Retry pending default model — custom provider may now have its models

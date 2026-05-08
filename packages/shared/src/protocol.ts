@@ -1,7 +1,7 @@
 /**
  * Extension ↔ Server WebSocket protocol messages.
  */
-import type { DashboardEvent, CommandInfo, FlowInfo, SessionSource, ImageContent, FileEntry, TurnUsage, ContextUsage, ModelInfo, PiSessionInfo, OpenSpecPhase, RoleInfo, ExtensionUiModule, DecoratorDescriptor } from "./types.js";
+import type { DashboardEvent, CommandInfo, FlowInfo, SessionSource, ImageContent, FileEntry, TurnUsage, ContextUsage, ModelInfo, ProviderInfo, PiSessionInfo, OpenSpecPhase, RoleInfo, ExtensionUiModule, DecoratorDescriptor } from "./types.js";
 
 // ── Extension → Server ──────────────────────────────────────────────
 
@@ -22,6 +22,14 @@ export interface SessionRegisterMessage {
   eventCount?: number;
   /** OS process ID of the pi agent — used for force-kill escalation */
   pid?: number;
+  /**
+   * Server-minted spawn correlation token. Bridge populates this from
+   * `process.env.PI_DASHBOARD_SPAWN_TOKEN` IFF this is the first register
+   * for the bridge process (`bc.hasRegisteredOnce === false`). Subsequent
+   * registers (reattach, in-process new/fork/resume) omit it.
+   * See change: spawn-correlation-token.
+   */
+  spawnToken?: string;
   /**
    * Why the bridge is registering this session. The bridge sets this to
    * `"spawn"` for the very first `session_register` after process boot
@@ -149,6 +157,17 @@ export interface ModelsListMessage {
   type: "models_list";
   sessionId: string;
   models: ModelInfo[];
+}
+
+/**
+ * Bridge -> server: pi's live provider catalogue derived from
+ * `modelRegistry.authStorage` + `modelRegistry.getProviderDisplayName`.
+ * Sent alongside ModelsListMessage. See change: replace-hardcoded-provider-lists.
+ */
+export interface ProvidersListMessage {
+  type: "providers_list";
+  sessionId: string;
+  providers: ProviderInfo[];
 }
 
 export interface SessionNameUpdateMessage {
@@ -320,6 +339,7 @@ export type ExtensionToServerMessage =
   | JjStateUpdateMessage
   | SessionNameUpdateMessage
   | ModelsListMessage
+  | ProvidersListMessage
   | ModelUpdateMessage
   | SessionsListExtensionMessage
   | ExtensionUiDismissMessage
@@ -376,6 +396,15 @@ export interface RenameSessionExtensionMessage {
 
 export interface RequestModelsMessage {
   type: "request_models";
+  sessionId: string;
+}
+
+/**
+ * Server -> bridge: ask the bridge to push a fresh providers_list.
+ * See change: replace-hardcoded-provider-lists.
+ */
+export interface RequestProvidersMessage {
+  type: "request_providers";
   sessionId: string;
 }
 
@@ -536,6 +565,7 @@ export type ServerToExtensionMessage =
   | ListFilesMessage
   | RenameSessionExtensionMessage
   | RequestModelsMessage
+  | RequestProvidersMessage
   | SetThinkingLevelMessage
   | ListSessionsExtensionMessage
   | SetModelMessage

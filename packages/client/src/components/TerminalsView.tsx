@@ -132,8 +132,13 @@ export function TerminalsView({
         </button>
       </div>
 
-      {/* Terminal views — keep-alive: all mounted, CSS visibility toggle */}
-      <div className="flex-1 relative min-h-0">
+      {/* Terminal views — keep-alive: all mounted, CSS visibility toggle.
+          Parent MUST be a flex column so each <TerminalView>'s `flex-1`
+          claims residual height. With `relative` (block-level) the
+          flex chain breaks and xterm renders at its default 24-row
+          intrinsic height — the actual cause of the half-height
+          rendering bug. See change: fix-terminal-half-height-dual-mount. */}
+      <div className="flex-1 flex flex-col min-h-0">
         {terminals.map((t) => (
           <TerminalView
             key={t.id}

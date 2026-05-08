@@ -98,12 +98,12 @@ export function registerProviderRoutes(fastify: FastifyInstance, deps: { network
       mkdirSync(dir, { recursive: true });
       writeFileSync(CONFIG_PATH, JSON.stringify(fileData, null, 2) + "\n", "utf-8");
 
-      // Broadcast credentials_updated so all sessions refresh their model registries
+      // Broadcast credentials_updated so each bridge re-reads providers.json
+      // and pushes a fresh per-session models_list. Browsers receive those
+      // pushes via the existing per-session broadcast — no global wipe.
+      // See change: simplify-model-selection-channels.
       if (piGateway) {
         piGateway.broadcast({ type: "credentials_updated" });
-      }
-      if (deps.browserGateway) {
-        deps.browserGateway.broadcastToAll({ type: "models_refreshed" });
       }
 
       return { success: true };

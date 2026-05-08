@@ -3,6 +3,7 @@
  * These expose WebSocket-only operations as HTTP endpoints
  * for use by skills, scripts, and external tooling.
  */
+import { existsSync } from "node:fs";
 import type { FastifyInstance } from "fastify";
 import type { SessionManager } from "./memory-session-manager.js";
 import type { PiGateway } from "./pi-gateway.js";
@@ -15,6 +16,7 @@ import type { PendingResumeIntentRegistry } from "./pending-resume-intent-regist
 import type { BootstrapStateStore } from "./bootstrap-state.js";
 import type { BootstrapQueue } from "./bootstrap-queue.js";
 import { attachRenameTarget, detachShouldClearName } from "./proposal-attach-naming.js";
+import { FORK_DEGRADED_TO_NEW_MESSAGE, FORK_DEGRADED_TO_NEW_CODE } from "./browser-handlers/session-action-handler.js";
 
 export interface SessionApiDeps {
   sessionManager: SessionManager;
@@ -36,6 +38,13 @@ export interface SessionApiDeps {
    * See change: preserve-session-order-on-reboot.
    */
   pendingResumeIntents?: PendingResumeIntentRegistry;
+  /**
+   * Optional pending-attach registry. When provided, the resume endpoint's
+   * fork-empty-session degradation path inherits the parent's
+   * `attachedProposal` for the new spawn.
+   * See change: fix-fork-empty-session-silent-timeout.
+   */
+  pendingAttachRegistry?: import("./pending-attach-registry.js").PendingAttachRegistry;
 }
 
 type IdParams = { Params: { id: string } };
@@ -48,7 +57,7 @@ function getSessionOrFail(sessionManager: SessionManager, id: string): { session
 }
 
 export function registerSessionApi(fastify: FastifyInstance, deps: SessionApiDeps) {
-  const { sessionManager, piGateway, browserGateway, pendingForkRegistry, pendingDashboardSpawns, bootstrapState, bootstrapQueue, pendingResumeIntents } = deps;
+  const { sessionManager, piGateway, browserGateway, pendingForkRegistry, pendingDashboardSpawns, bootstrapState, bootstrapQueue, pendingResumeIntents, pendingAttachRegistry } = deps;
 
   /**
    * Gate pi-dependent operations on bootstrap status. Returns:
@@ -282,8 +291,44 @@ export function registerSessionApi(fastify: FastifyInstance, deps: SessionApiDep
         reply.code(409);
         return { success: false, error: "session is already being resumed" } satisfies ApiResponse;
       }
-      if (mode === "fork" && pendingForkRegistry) {
-        pendingForkRegistry.recordFork(session.cwd, id);
+      // Fork preflight: silent-degrade when the source has no on-disk JSONL.
+      // Mirrors the WS-handler logic. See change:
+      // fix-fork-empty-session-silent-timeout.
+      if (mode === "fork" && !existsSync(session.sessionFile)) {
+        // Inherit attachedProposal from parent.
+        if (session.attachedProposal && pendingAttachRegistry) {
+          pendingAttachRegistry.enqueue(session.cwd, session.attachedProposal);
+        }
+        const degradeConfig = loadConfig();
+        const degradeResult = await spawnPiSession(session.cwd, {
+          strategy: degradeConfig.spawnStrategy,
+        });
+        if (degradeResult.process && degradeResult.pid) {
+          browserGateway.headlessPidRegistry.register(
+            degradeResult.pid,
+            session.cwd,
+            degradeResult.process,
+            degradeResult.spawnToken,
+          );
+        }
+        if (degradeResult.dashboardSpawned && degradeResult.success) {
+          pendingDashboardSpawns?.set(
+            session.cwd,
+            (pendingDashboardSpawns?.get(session.cwd) ?? 0) + 1,
+          );
+        }
+        if (!degradeResult.success) {
+          reply.code(500);
+          return {
+            success: false,
+            error: degradeResult.message,
+          } satisfies ApiResponse;
+        }
+        return {
+          success: true,
+          data: { message: FORK_DEGRADED_TO_NEW_MESSAGE },
+          code: FORK_DEGRADED_TO_NEW_CODE,
+        } satisfies ApiResponse<{ message: string }>;
       }
       // Tag the user-resume intent BEFORE spawning. REST resume always
       // uses "front" placement — the only "keep" path is drag-to-resume
@@ -297,6 +342,12 @@ export function registerSessionApi(fastify: FastifyInstance, deps: SessionApiDep
         mode,
         strategy: config.spawnStrategy,
       });
+      // Fork bookkeeping uses the spawn token (not cwd) so two concurrent
+      // forks in the same cwd correlate correctly. See change:
+      // spawn-correlation-token.
+      if (mode === "fork" && pendingForkRegistry && spawnResult.spawnToken) {
+        pendingForkRegistry.recordFork(spawnResult.spawnToken, id);
+      }
       if (spawnResult.dashboardSpawned && spawnResult.success) {
         pendingDashboardSpawns?.set(session.cwd, (pendingDashboardSpawns?.get(session.cwd) ?? 0) + 1);
       }

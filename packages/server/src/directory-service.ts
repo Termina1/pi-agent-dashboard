@@ -45,6 +45,37 @@ export interface DirectoryAddedResult {
   openspecData: OpenSpecData;
 }
 
+/**
+ * `true` if `OpenSpecData` represents "no useful data yet" — either
+ * absent, or `{ initialized: false, changes: [] }` (cold cache).
+ * Used by broadcast call-sites to decide whether a transition from
+ * empty→populated warrants firing `openspec_update`. Pulled into
+ * shared scope so `server.ts` (post-install repair) and
+ * `session-bootstrap.ts` (initial poll) both use the same predicate.
+ *
+ * See change: fix-cold-boot-openspec-protocol.
+ */
+export function isOpenSpecDataEmpty(d: OpenSpecData | undefined): boolean {
+  if (!d) return true;
+  return !d.initialized && (!d.changes || d.changes.length === 0);
+}
+
+/**
+ * Synchronous, spawn-free probe for `<cwd>/openspec/changes`. Returns
+ * `true` iff the path exists and is a directory. Used by the WS
+ * on-connect snapshot to disambiguate "no openspec here" from
+ * "openspec here, polling pending". ~10 μs per call.
+ *
+ * See change: fix-cold-boot-openspec-protocol.
+ */
+export function hasOpenSpecDir(cwd: string): boolean {
+  try {
+    return fs.statSync(path.join(cwd, "openspec", "changes")).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export interface DirectoryService {
   knownDirectories(): string[];
   discoverSessions(cwd: string): DiscoveredSession[];

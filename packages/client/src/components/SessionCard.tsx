@@ -306,6 +306,7 @@ export function SessionCard({
   processes,
   onKillProcess,
   hasError,
+  isRetrying,
 }: {
   session: DashboardSession;
   selectedId?: string;
@@ -331,6 +332,8 @@ export function SessionCard({
   processes?: ProcessEntry[];
   onKillProcess?: (pgid: number) => void;
   hasError?: boolean;
+  /** True iff a synthesized provider retry is in flight (retryState set, no error yet). */
+  isRetrying?: boolean;
 }) {
   const isSelected = selectedId === session.id;
   const [isRenaming, setIsRenaming] = useState(false);
@@ -341,7 +344,9 @@ export function SessionCard({
     ? "bg-yellow-500 animate-pulse"
     : hasError
       ? "bg-red-500"
-      : (statusColors[session.status] ?? "bg-[var(--bg-surface)]");
+      : isRetrying
+        ? "bg-amber-500 animate-pulse"
+        : (statusColors[session.status] ?? "bg-[var(--bg-surface)]");
 
   function handleConfirmRename(name: string) {
     setIsRenaming(false);

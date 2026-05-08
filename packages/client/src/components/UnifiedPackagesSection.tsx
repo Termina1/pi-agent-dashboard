@@ -8,7 +8,7 @@
  *
  * See change: consolidate-packages-settings-ui.
  */
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@mdi/react";
 import {
 	mdiAlertCircle,
@@ -33,6 +33,11 @@ import type {
 import type { NpmPackageResult } from "@blackbelt-technology/pi-dashboard-shared/rest-api.js";
 import { PackageReadmeDialog } from "./PackageReadmeDialog.js";
 import { PinDirectoryDialog } from "./PinDirectoryDialog.js";
+import { WhatsNewDialog } from "./WhatsNewDialog.js";
+import { usePiChangelog } from "../hooks/usePiChangelog.js";
+
+/** Single core package the breaking-change icon is wired for. v1 scope. */
+const PI_CORE_PKG = "@mariozechner/pi-coding-agent";
 
 type ProgressMap = Map<string, { phase: "start" | "output" | "complete" | "error"; message?: string }>;
 
@@ -126,6 +131,35 @@ export function UnifiedPackagesSection() {
 		[corePackages],
 	);
 
+	// ── pi changelog (breaking-change icon + WhatsNewDialog) ──────────────
+	// Only fetched for pi-coding-agent when it has an update available.
+	// See change: pi-update-whats-new-panel.
+	const piPkg = useMemo(
+		() => corePackages.find((p) => p.name === PI_CORE_PKG),
+		[corePackages],
+	);
+	const piChangelogEnabled =
+		!!piPkg && !!piPkg.updateAvailable && !!piPkg.latestVersion && piPkg.latestVersion !== piPkg.currentVersion;
+	const piChangelog = usePiChangelog(
+		PI_CORE_PKG,
+		piPkg?.currentVersion,
+		piPkg?.latestVersion ?? undefined,
+		{ enabled: piChangelogEnabled },
+	);
+	const piBreakingCount = useMemo(() => {
+		if (!piChangelog.data || !piChangelog.data.hasBreaking) return 0;
+		return piChangelog.data.releases.reduce((s, r) => s + r.breaking.length, 0);
+	}, [piChangelog.data]);
+	// Drive the icon's visual state from the changelog response. See
+	// change: improve-pi-update-detection.
+	const piWhatsNewKind = useMemo<"breaking" | "info" | undefined>(() => {
+		if (!piChangelog.data) return undefined;
+		if (piChangelog.data.hasBreaking) return "breaking";
+		if (piChangelog.data.releases.length > 0) return "info";
+		return undefined;
+	}, [piChangelog.data]);
+	const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+
 	// ── Installed-packages data (recommended + other) ─────────────────────
 	const installed = useInstalledPackages("global");
 	const operations = usePackageOperations("global", undefined, installed.refresh);
@@ -134,25 +168,68 @@ export function UnifiedPackagesSection() {
 	const [readmePkg, setReadmePkg] = useState<NpmPackageResult | null>(null);
 	const [movePickerSource, setMovePickerSource] = useState<string | null>(null);
 
-	const handleCheckUpdates = useCallback(async () => {
-		setCheckingUpdates(true);
-		try {
-			const res = await fetch(`${getApiBase()}/api/packages/check-updates`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: "{}",
-			});
-			const body = await res.json();
-			if (body.success) {
-				setUpdatesAvailable(new Set(body.data.map((u: any) => u.source)));
+	const checkInFlightRef = useRef(false);
+	const handleCheckUpdates = useCallback(
+		async (opts: { silent?: boolean } = {}) => {
+			if (checkInFlightRef.current) return;
+			checkInFlightRef.current = true;
+			if (!opts.silent) setCheckingUpdates(true);
+			try {
+				const res = await fetch(`${getApiBase()}/api/packages/check-updates`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: "{}",
+				});
+				const body = await res.json();
+				if (body.success) {
+					setUpdatesAvailable(new Set(body.data.map((u: any) => u.source)));
+				}
+			} catch {
+				/* swallow — next poll retries */
 			}
-		} catch {
-			/* ignore */
-		}
-		setCheckingUpdates(false);
-		// Also refresh Core data so a single click covers the whole section.
-		refresh(true);
-	}, [refresh]);
+			if (!opts.silent) setCheckingUpdates(false);
+			checkInFlightRef.current = false;
+			// Also refresh Core data when this is a manual check; auto-checks
+			// don't disturb usePiCoreVersions' own polling.
+			if (!opts.silent) refresh(true);
+		},
+		[refresh],
+	);
+
+	// Auto-check installed packages for updates: fires once after the
+	// installed list resolves, then every 30 min, and after every
+	// successful package operation. Mirrors pi's interactive-TUI startup
+	// behaviour (`packageManager.checkForAvailableUpdates()`). See change:
+	// improve-pi-update-detection.
+	const initialCheckFiredRef = useRef(false);
+	useEffect(() => {
+		if (initialCheckFiredRef.current) return;
+		if (installed.isLoading) return;
+		if (installed.packages.length === 0) return;
+		initialCheckFiredRef.current = true;
+		handleCheckUpdates({ silent: true });
+	}, [installed.isLoading, installed.packages.length, handleCheckUpdates]);
+
+	// 30-minute poll while mounted.
+	useEffect(() => {
+		const id = setInterval(() => {
+			handleCheckUpdates({ silent: true });
+		}, 30 * 60 * 1000);
+		return () => clearInterval(id);
+	}, [handleCheckUpdates]);
+
+	// Re-fire after every successful package operation. The dispatch
+	// shape comes from useMessageHandler's `pi-package-event` CustomEvent.
+	useEffect(() => {
+		const handler = (e: Event) => {
+			const msg = (e as CustomEvent).detail;
+			if (msg?.type === "package_operation_complete" && msg.success) {
+				handleCheckUpdates({ silent: true });
+			}
+		};
+		window.addEventListener("pi-package-event", handler);
+		return () => window.removeEventListener("pi-package-event", handler);
+	}, [handleCheckUpdates]);
 
 	// Group installed rows: Core whitelist members are dropped (Core wins).
 	const coreNpmNames = useMemo(() => corePackages.map((p) => p.name), [corePackages]);
@@ -261,24 +338,30 @@ export function UnifiedPackagesSection() {
 						</div>
 					)}
 					<div className="space-y-1 mb-4">
-						{corePackages.map((pkg) => (
-							<PackageRow
-								key={pkg.name}
-								displayName={pkg.displayName}
-								source={pkg.name}
-								sourceType={pkg.installSource === "managed" ? "local" : "global"}
-								currentVersion={pkg.currentVersion}
-								latestVersion={pkg.latestVersion}
-								updateAvailable={pkg.updateAvailable}
-								busy={coreUpdating.has(pkg.name)}
-								progress={coreProgress.get(pkg.name)?.message}
-								error={coreErrors.get(pkg.name)}
-								canUpdate={true}
-								canUninstall={false}
-								onUpdate={() => doCoreUpdate([pkg.name])}
-								testId={`pi-core-row-${pkg.name}`}
-							/>
-						))}
+						{corePackages.map((pkg) => {
+							const isPi = pkg.name === PI_CORE_PKG;
+							return (
+								<PackageRow
+									key={pkg.name}
+									displayName={pkg.displayName}
+									source={pkg.name}
+									sourceType={pkg.installSource === "managed" ? "local" : "global"}
+									currentVersion={pkg.currentVersion}
+									latestVersion={pkg.latestVersion}
+									updateAvailable={pkg.updateAvailable}
+									busy={coreUpdating.has(pkg.name)}
+									progress={coreProgress.get(pkg.name)?.message}
+									error={coreErrors.get(pkg.name)}
+									canUpdate={true}
+									canUninstall={false}
+									onUpdate={() => doCoreUpdate([pkg.name])}
+									breakingChangeCount={isPi ? piBreakingCount : undefined}
+									whatsNewKind={isPi ? piWhatsNewKind : undefined}
+									onShowWhatsNew={isPi && piWhatsNewKind ? () => setWhatsNewOpen(true) : undefined}
+									testId={`pi-core-row-${pkg.name}`}
+								/>
+							);
+						})}
 					</div>
 				</>
 			)}
@@ -326,6 +409,16 @@ export function UnifiedPackagesSection() {
 						});
 					}}
 					onCancel={() => setMovePickerSource(null)}
+				/>
+			)}
+			{whatsNewOpen && piChangelog.data && piPkg && (
+				<WhatsNewDialog
+					open={whatsNewOpen}
+					response={piChangelog.data}
+					displayName={piPkg.displayName}
+					latestVersion={piPkg.latestVersion ?? piChangelog.data.to}
+					onClose={() => setWhatsNewOpen(false)}
+					onUpdate={() => doCoreUpdate([PI_CORE_PKG])}
 				/>
 			)}
 		</div>

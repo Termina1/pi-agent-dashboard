@@ -80,10 +80,6 @@ function classify(
   if (n.endsWith(".exe")) {
     if (n.includes("setup"))
       return { platform: "windows", kind: "Installer (.exe)", priority: 0 };
-    if (n.includes("arm64") && n.includes("portable"))
-      return { platform: "windows", kind: "Portable (arm64)", priority: 3 };
-    if (n.includes("portable"))
-      return { platform: "windows", kind: "Portable (x64)", priority: 2 };
     return { platform: "windows", kind: "Windows .exe", priority: 1 };
   }
   if (n.endsWith(".zip") && n.includes("win32")) {

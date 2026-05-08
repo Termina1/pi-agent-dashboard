@@ -22,6 +22,14 @@ import type { EditorInstanceStatus } from "./editor-types.js";
 export interface SessionAddedMessage {
   type: "session_added";
   session: DashboardSession;
+  /**
+   * Echoed `requestId` from the originating browser `spawn_session` /
+   * `resume_session` (when known). Lets the client auto-select / dismiss
+   * placeholder by exact correlation, replacing the cwd-FIFO heuristic.
+   * Absent for server-initiated spawns (auto-resume, headless reload).
+   * See change: spawn-correlation-token.
+   */
+  spawnRequestId?: string;
 }
 
 export interface SessionUpdatedMessage {
@@ -118,6 +126,24 @@ export interface ResumeResultBrowserMessage {
   sessionId: string;
   success: boolean;
   message: string;
+  /** Echoed from input `resume_session.requestId` when provided. */
+  requestId?: string;
+  /**
+   * For `mode: "fork"` only — populated once the new fork's bridge has
+   * registered and been correlated. Absent for `mode: "continue"` (the
+   * sessionId is unchanged across the respawn).
+   * See change: spawn-correlation-token.
+   */
+  newSessionId?: string;
+  /**
+   * Optional structured failure classifier. Known values:
+   *   - `"FORK_EMPTY_SESSION"`: fork attempted on a session whose
+   *     `sessionFile` does not exist on disk yet (e.g., freshly spawned,
+   *     no messages persisted).
+   * Old clients that don't read this field still get the human-readable
+   * `message`. See change: fix-fork-empty-session-silent-timeout.
+   */
+  code?: string;
 }
 
 export interface SpawnResultBrowserMessage {
@@ -125,6 +151,10 @@ export interface SpawnResultBrowserMessage {
   cwd: string;
   success: boolean;
   message: string;
+  /** Echoed from input `spawn_session.requestId` when provided. */
+  requestId?: string;
+  /** Spawned process PID when known (headless strategies); informational. */
+  pid?: number;
 }
 
 /**
@@ -577,6 +607,15 @@ export interface RequestModelsBrowserMessage {
   sessionId: string;
 }
 
+/**
+ * Browser asks the server to forward `request_providers` to the bridge.
+ * See change: replace-hardcoded-provider-lists.
+ */
+export interface RequestProvidersBrowserMessage {
+  type: "request_providers";
+  sessionId: string;
+}
+
 export interface SetThinkingLevelBrowserMessage {
   type: "set_thinking_level";
   sessionId: string;
@@ -657,6 +696,12 @@ export interface ResumeSessionBrowserMessage {
   /** When forking, optionally fork from a specific session entry instead of the latest */
   entryId?: string;
   /**
+   * Client-minted UUIDv4 used to correlate `resume_result` and (for fork mode)
+   * the eventual `session_added` for the new session. Optional for back-compat.
+   * See change: spawn-correlation-token.
+   */
+  requestId?: string;
+  /**
    * Placement intent for the resumed session in the cwd's sessionOrder:
    *   - "front" (default): move to top of alive tier (Resume button, REST,
    *     prompt-auto-resume).
@@ -690,6 +735,13 @@ export interface SpawnSessionBrowserMessage {
    * add-folder-task-checker-and-spawn-attach.
    */
   attachProposal?: string;
+  /**
+   * Client-minted UUIDv4 used to correlate `spawn_result` and the eventual
+   * `session_added` (which echoes it as `spawnRequestId`). Optional for
+   * back-compat with older clients.
+   * See change: spawn-correlation-token.
+   */
+  requestId?: string;
 }
 
 export interface AttachProposalBrowserMessage {
@@ -870,6 +922,7 @@ export type BrowserToServerMessage =
   | OpenSpecRefreshBrowserMessage
   | RenameSessionBrowserMessage
   | RequestModelsBrowserMessage
+  | RequestProvidersBrowserMessage
   | SetThinkingLevelBrowserMessage
   | SetModelBrowserMessage
   | ShutdownBrowserMessage

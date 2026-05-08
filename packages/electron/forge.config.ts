@@ -52,6 +52,8 @@ const config: ForgeConfig = {
       "./resources/trayTemplate@2x.png",
       "./resources/icon.png",
       "./resources/icon.ico",
+      // Loading-page HTML resource. See change: electron-server-launch-controls.
+      "./resources/loading.html",
       // Bundled server (created by scripts/bundle-server.mjs)
       ...(fs.existsSync(path.resolve(__dirname, "resources/server")) ? ["./resources/server"] : []),
       // Bundled first-party recommended extensions (created by scripts/bundle-recommended-extensions.mjs
@@ -129,30 +131,8 @@ const config: ForgeConfig = {
       name: "@pengx17/electron-forge-maker-appimage",
       config: {},
     }] : []),
-    {
-      name: "@felixrieseberg/electron-forge-maker-nsis",
-      config: {
-        oneClick: true,
-        perMachine: false,
-        // Pin every install-layer name explicitly. electron-builder's NSIS
-        // install-dir fallback chain reads npm `name` (slash-stripped) when
-        // nothing else overrides it, which produced the
-        // `@blackbelt-technologypi-dashboard-electron` install dir we hit
-        // on Windows. The override below makes the install layout
-        // version-independent of electron-builder defaults. See change:
-        // fix-electron-windows-installer-and-server-bootstrap (D2).
-        getAppBuilderConfig: async () => ({
-          publish: null,
-          productName: "pi-dashboard",
-          appId: "com.blackbelt-technology.pi-dashboard",
-          nsis: {
-            artifactName: "pi-dashboard-Setup-${version}.exe",
-            shortcutName: "pi-dashboard",
-            uninstallDisplayName: "pi-dashboard",
-          },
-        }),
-      },
-    },
+    // NSIS installer removed — see change: simplify-electron-bootstrap-derived-state.
+    // Windows distribution is ZIP + portable.exe only.
   ],
   plugins: [
     {

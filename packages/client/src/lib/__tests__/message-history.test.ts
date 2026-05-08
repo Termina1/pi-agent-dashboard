@@ -88,4 +88,63 @@ describe("extractUserPromptHistory", () => {
     ];
     expect(extractUserPromptHistory(msgs)).toEqual(["fix the bug", "!ls -la", "/compact"]);
   });
+
+  // See change: render-skill-invocations-collapsibly.
+
+  function skillMsg(id: string, content: string): ChatMessage {
+    // Mirrors what event-reducer.ts stamps on message_start for a wrapped user msg.
+    const m = content.match(
+      /^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$/,
+    );
+    const name = m![1];
+    const args = m![4];
+    return {
+      id,
+      role: "user",
+      content,
+      timestamp: 0,
+      skill: {
+        name,
+        location: m![2],
+        body: m![3],
+        args,
+        condensed: `/skill:${name}${args ? " " + args : ""}`,
+      },
+    };
+  }
+
+  it("recalls condensed slash form for user msgs with skill stamp + args", () => {
+    const wrapped =
+      `<skill name="openspec-explore" location="/x/SKILL.md">\nbody\n</skill>\n\ncontinue with X`;
+    const msgs: ChatMessage[] = [skillMsg("u1", wrapped)];
+    expect(extractUserPromptHistory(msgs)).toEqual(["/skill:openspec-explore continue with X"]);
+  });
+
+  it("recalls bare slash form when skill has no args", () => {
+    const wrapped = `<skill name="foo" location="/x">\nbody\n</skill>`;
+    const msgs: ChatMessage[] = [skillMsg("u1", wrapped)];
+    expect(extractUserPromptHistory(msgs)).toEqual(["/skill:foo"]);
+  });
+
+  it("falls back to ad-hoc parsing when skill stamp is missing (pre-stamping replay)", () => {
+    const wrapped = `<skill name="foo" location="/x">\nbody\n</skill>\n\nargs`;
+    // userMsg() helper does NOT stamp `skill` — simulates older state shape.
+    const msgs: ChatMessage[] = [userMsg("u1", wrapped)];
+    expect(extractUserPromptHistory(msgs)).toEqual(["/skill:foo args"]);
+  });
+
+  it("mixed plain + skill history is newest-first and dedups consecutive", () => {
+    const wrapped = `<skill name="foo" location="/x">\nb\n</skill>\n\nargs1`;
+    const msgs: ChatMessage[] = [
+      userMsg("u1", "hello"),
+      skillMsg("u2", wrapped),
+      skillMsg("u3", wrapped), // consecutive dup of condensed form
+      userMsg("u4", "world"),
+    ];
+    expect(extractUserPromptHistory(msgs)).toEqual([
+      "world",
+      "/skill:foo args1",
+      "hello",
+    ]);
+  });
 });

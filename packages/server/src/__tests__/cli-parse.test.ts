@@ -76,9 +76,27 @@ describe("parseArgs", () => {
 });
 
 describe("daemon spawn jiti resolution", () => {
-  it("resolveJitiImport throws outside of pi context", async () => {
-    // In test context (no pi/jiti loader), peer deps aren't resolvable
-    const { resolveJitiImport } = await import("@blackbelt-technology/pi-dashboard-shared/resolve-jiti.js");
-    expect(() => resolveJitiImport()).toThrow("Cannot find pi's TypeScript loader");
+  it("resolveJitiImport either returns a file:// URL or throws the documented error", async () => {
+    // After change `support-upstream-jiti-resolution`, the resolver
+    // also looks for upstream `jiti` (bare name). Vitest itself depends
+    // transitively on `jiti`, so when the test runner is the anchor,
+    // resolution may succeed. Either outcome is valid — we just assert
+    // the contract: success returns a `file://` URL, failure throws the
+    // documented error.
+    const { resolveJitiImport } = await import(
+      "@blackbelt-technology/pi-dashboard-shared/resolve-jiti.js"
+    );
+    let url: string | undefined;
+    let err: Error | undefined;
+    try {
+      url = resolveJitiImport();
+    } catch (e) {
+      err = e as Error;
+    }
+    if (url !== undefined) {
+      expect(url.startsWith("file://")).toBe(true);
+    } else {
+      expect(err?.message).toContain("Cannot find pi's TypeScript loader");
+    }
   });
 });

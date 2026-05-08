@@ -1,10 +1,16 @@
 /**
  * Pi core package updater.
  *
- * Runs `npm update -g <pkg>` for globally-installed packages or
- * `npm update <pkg>` in `~/.pi-dashboard/` for managed installs.
+ * Runs `npm install -g <pkg>@latest` for globally-installed packages or
+ * `npm install <pkg>@latest` in `~/.pi-dashboard/` for managed installs.
+ * The `@latest` suffix is required because the consuming `package.json`
+ * dependency range (e.g. `^0.70.0`) would otherwise pin updates to the
+ * same minor — breaking cross-minor upgrades that pi now ships routinely
+ * (0.71+ minors carry breaking changes per its CHANGELOG).
  * Coordinates with PackageManagerWrapper's busy-lock so extension
  * operations and core updates can't run concurrently.
+ *
+ * See change: fix-pi-core-update-cross-minor.
  */
 import { spawn } from "node:child_process"; // ban:child_process-ok npm-update streams stdout/stderr via pipe for progress events; refactor to platform/spawn Recipe is tracked tech debt
 import path from "node:path";
@@ -75,10 +81,14 @@ export function defaultRunNpmUpdate(
 	seams: DefaultRunNpmUpdateSeams = {},
 ): Promise<void> {
 	return new Promise((resolve, reject) => {
+		// Always target the npm `latest` dist-tag — bypasses the
+		// consuming package.json range so cross-minor jumps work. See
+		// change: fix-pi-core-update-cross-minor.
+		const spec = `${pkg.name}@latest`;
 		const args =
 			pkg.installSource === "global"
-				? ["update", "-g", pkg.name]
-				: ["update", pkg.name];
+				? ["install", "-g", spec]
+				: ["install", spec];
 		const cwd = pkg.installSource === "managed" ? MANAGED_DIR : process.cwd();
 
 		if (pkg.installSource === "managed" && !existsSync(MANAGED_DIR)) {
@@ -149,9 +159,9 @@ export function defaultRunNpmUpdate(
 			} else {
 				const hint =
 					pkg.installSource === "global" && /permission|EACCES|EPERM|EROFS/i.test(stderrBuf)
-						? ` (permission error — try: sudo npm update -g ${pkg.name})`
+						? ` (permission error — try: sudo npm install -g ${pkg.name}@latest)`
 						: "";
-				reject(new Error(`npm update exited with code ${code}${hint}`));
+				reject(new Error(`npm install exited with code ${code}${hint}`));
 			}
 		});
 	});

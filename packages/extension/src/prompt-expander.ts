@@ -6,8 +6,9 @@
  * by reading template/skill files directly and expanding them.
  */
 import { readFileSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { readdirSync, statSync } from "node:fs";
+import { buildSkillBlock } from "@blackbelt-technology/pi-dashboard-shared/skill-block-parser.js";
 
 /** Scan directories for .md prompt template files */
 function findPromptTemplates(cwd: string): Map<string, string> {
@@ -97,12 +98,59 @@ export function expandPromptTemplateFromDisk(text: string, cwd: string, pi?: any
 
   try {
     const content = readTemplate(filePath);
-    // Simple arg substitution: replace $1, $2, etc. or just append args
+
+    // Skill detection: either the local-scan key starts with `skill:` or the
+    // pi.getCommands() fallback resolved a command whose `source === "skill"`
+    // (we re-check below). Skill expansions wrap in pi's `<skill>` envelope so
+    // the dashboard ingress path is byte-identical to pi's own _expandSkillCommand,
+    // which lets the client and server recover the slash-command form.
+    // See change: render-skill-invocations-collapsibly.
+    const isSkill = isSkillResolution(templateName, filePath, pi);
+    if (isSkill) {
+      const bareName = templateName.replace(/^skill:/, "");
+      return buildSkillBlock({
+        name: bareName,
+        filePath,
+        baseDir: dirname(filePath),
+        body: content,
+        userArgs: argsString || undefined,
+      });
+    }
+
+    // Plain prompt templates: append args after a blank line, no wrapper.
     if (argsString) {
       return `${content}\n\n${argsString}`;
     }
     return content;
   } catch {
     return text;
+  }
+}
+
+/**
+ * Detect whether the resolved `filePath` came from a skill source.
+ *
+ * The local-scan key tells us directly when it starts with `skill:`. For the
+ * pi.getCommands() fallback we re-query and check `source === "skill"` against
+ * the same templateName.
+ */
+function isSkillResolution(
+  templateName: string,
+  filePath: string,
+  pi: any | undefined,
+): boolean {
+  if (templateName.startsWith("skill:")) return true;
+  // The colon-alias path (e.g. /opsx:continue) maps to a hyphen filename and is
+  // a prompt template, not a skill. Skills always use the `skill:` prefix in
+  // both the local scan and pi.getCommands().
+  if (!pi?.getCommands) return false;
+  try {
+    const commands = pi.getCommands();
+    const match = commands.find(
+      (c: any) => c.name === templateName && c.source === "skill" && c.path === filePath,
+    );
+    return !!match;
+  } catch {
+    return false;
   }
 }

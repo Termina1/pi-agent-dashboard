@@ -8,6 +8,7 @@ import { join } from "node:path";
 import os from "node:os";
 import type { DashboardSession, SessionSource } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 import { type SessionMeta, metaPath, readSessionMeta, writeSessionMeta } from "@blackbelt-technology/pi-dashboard-shared/session-meta.js";
+import { condenseForFirstMessage } from "@blackbelt-technology/pi-dashboard-shared/skill-block-parser.js";
 import { extractSessionStats } from "./session-stats-reader.js";
 
 function getSessionsDir(): string {
@@ -236,14 +237,15 @@ function readJsonlHeaderSync(filePath: string): { id: string; cwd: string; name?
         const entry = JSON.parse(line);
         if (entry.type === "session" && entry.id) header = entry;
         if (entry.type === "session_info" && entry.name) name = entry.name;
+        // See change: render-skill-invocations-collapsibly.
         if (!firstMessage && entry.type === "message" && entry.message?.role === "user") {
           const msg = entry.message;
           if (typeof msg.content === "string") {
-            firstMessage = msg.content.slice(0, 200);
+            firstMessage = condenseForFirstMessage(msg.content, 200);
           } else if (Array.isArray(msg.content)) {
             for (const part of msg.content) {
               if (part.type === "text" && part.text) {
-                firstMessage = part.text.slice(0, 200);
+                firstMessage = condenseForFirstMessage(part.text, 200);
                 break;
               }
             }

@@ -12,11 +12,12 @@ import type { DirectoryService } from "./directory-service.js";
 import { extractSessionUpdates, isActivityEvent, isUnreadTrigger, isPushTrigger } from "./event-status-extraction.js";
 import type { ViewedSessionTracker } from "./viewed-session-tracker.js";
 import type { PushDispatcher } from "./push/push-dispatcher.js";
+import { setCatalogueForSession } from "./provider-catalogue-cache.js";
 import { spawnPiSession } from "./process-manager.js";
 import { loadConfig } from "@blackbelt-technology/pi-dashboard-shared/config.js";
 import { writeSessionMeta } from "@blackbelt-technology/pi-dashboard-shared/session-meta.js";
 import type { DashboardSession } from "@blackbelt-technology/pi-dashboard-shared/types.js";
-import { detectOpenSpecActivity } from "@blackbelt-technology/pi-dashboard-shared/openspec-activity-detector.js";
+import { detectOpenSpecActivity, isValidOpenSpecChangeSlug } from "@blackbelt-technology/pi-dashboard-shared/openspec-activity-detector.js";
 import { extractTurnStats } from "@blackbelt-technology/pi-dashboard-shared/stats-extractor.js";
 import { attachRenameTarget, isNameAutoSetFromAttachment } from "./proposal-attach-naming.js";
 
@@ -50,6 +51,14 @@ export interface EventWiringDeps {
    * See change: add-server-push-notifications.
    */
   pushDispatcher?: PushDispatcher;
+  /**
+   * Optional client-correlation registry. When provided, the wiring
+   * consumes the requestId for the resolved spawnToken after a successful
+   * three-tier link and surfaces it on `session_added` as `spawnRequestId`,
+   * letting the client auto-select / dismiss its placeholder by exact
+   * correlation. See change: spawn-correlation-token.
+   */
+  pendingClientCorrelations?: import("./pending-client-correlations.js").PendingClientCorrelations;
 }
 
 /**
@@ -70,6 +79,7 @@ export function wireEvents(deps: EventWiringDeps): void {
     pendingAttachRegistry,
     viewedSessionTracker,
     pushDispatcher,
+    pendingClientCorrelations,
   } = deps;
 
   // Broadcast placeholder session to browsers when auto-created from early events
@@ -251,10 +261,19 @@ export function wireEvents(deps: EventWiringDeps): void {
       // Server-side OpenSpec activity detection from forwarded events
       // Skip during replay — replayed events from a forked session would set stale phase/change
       if (msg.event.eventType === "tool_execution_start" && !replayingSessions.has(sessionId)) {
-        const detected = detectOpenSpecActivity(
+        const detectedRaw = detectOpenSpecActivity(
           msg.event.data.toolName as string,
           msg.event.data.args as Record<string, unknown> | undefined,
         );
+        // Defense-in-depth (see change: fix-uuid-rename-bug). Even if a future
+        // detector regression returns a junk-shaped `changeName` (UUID, mixed
+        // case, etc.), refuse to stamp openspecChange / attachedProposal /
+        // name. Manual attach paths (browser handler, REST) bypass this and
+        // accept any name from a server-curated list.
+        const detected =
+          detectedRaw && (!detectedRaw.changeName || isValidOpenSpecChangeSlug(detectedRaw.changeName))
+            ? detectedRaw
+            : null;
         if (detected) {
           const session = sessionManager.get(sessionId);
           const activityUpdates: Partial<DashboardSession> = {};
@@ -476,7 +495,34 @@ export function wireEvents(deps: EventWiringDeps): void {
         }
       }
 
-      browserGateway.headlessPidRegistry.linkSession(sessionId, msg.cwd);
+      // Three-tier link: token → pid → cwd-FIFO. Each tier is independently
+      // correct; `linkByToken` is the strong identity introduced by
+      // `spawn-correlation-token`. cwd-FIFO is the legacy fallback for old
+      // bridges that send neither token nor pid (and is logged so we can see
+      // when it actually triggers).
+      let linked = false;
+      if (msg.spawnToken) {
+        linked = browserGateway.headlessPidRegistry.linkByToken(msg.spawnToken, sessionId, msg.pid);
+      }
+      if (!linked && msg.pid !== undefined) {
+        linked = browserGateway.headlessPidRegistry.linkByPid(sessionId, msg.pid);
+      }
+      if (!linked) {
+        if (msg.spawnToken || msg.pid !== undefined) {
+          console.error(
+            `[event-wiring] cwd-FIFO fallback for session ${sessionId} — token=${msg.spawnToken ?? ""} pid=${msg.pid ?? ""} cwd=${msg.cwd}`,
+          );
+        }
+        browserGateway.headlessPidRegistry.linkSession(sessionId, msg.cwd);
+      }
+
+      // Resolve the originating browser `requestId` (when known) so the
+      // upcoming session_added broadcast can carry spawnRequestId and the
+      // client can auto-select / dismiss its placeholder.
+      // See change: spawn-correlation-token.
+      const spawnRequestId = (msg.spawnToken && pendingClientCorrelations)
+        ? pendingClientCorrelations.consume(msg.spawnToken)
+        : undefined;
 
       const isNewSession = !knownSessionIds.has(sessionId);
       knownSessionIds.add(sessionId);
@@ -493,7 +539,11 @@ export function wireEvents(deps: EventWiringDeps): void {
         }
       }
 
-      const forkParent = pendingForkRegistry.consumeFork(msg.cwd);
+      // Fork-parent lookup is keyed by spawn token (was: cwd, racy on
+      // multi-fork-in-same-cwd). See change: spawn-correlation-token.
+      const forkParent = msg.spawnToken
+        ? pendingForkRegistry.consumeFork(msg.spawnToken)
+        : undefined;
       sessionOrderManager.insert(msg.cwd, sessionId);
 
       if (forkParent) {
@@ -513,7 +563,7 @@ export function wireEvents(deps: EventWiringDeps): void {
 
       const updatedSession = sessionManager.get(sessionId);
       if (updatedSession) {
-        browserGateway.broadcastSessionAdded(updatedSession);
+        browserGateway.broadcastSessionAdded(updatedSession, spawnRequestId ? { spawnRequestId } : undefined);
       }
 
       const isNewCwd = !sessionManager.listAll().some(
@@ -642,6 +692,28 @@ export function wireEvents(deps: EventWiringDeps): void {
         sessionId,
         models: msg.models,
       } as any);
+    }
+
+    if (msg.type === "providers_list") {
+      // Cache the bridge-pushed catalogue. Browsers don't subscribe to it
+      // directly; they read via GET /api/provider-auth/status.
+      // Broadcast `models_refreshed` ONLY when the catalogue contents
+      // actually changed. Routine state-syncs (every fork/resume/reconnect/
+      // subscribe) re-send identical content; broadcasting unconditionally
+      // wipes every browser's modelsMap and — because App.tsx's
+      // auto-subscribe effect skips re-requesting models for any session
+      // that's already in `subscribedRef`, leaves previously-visited
+      // sessions with an empty model selector until reconnect.
+      //
+      // The catalogue cache is now a pure read consumer for the Settings
+      // UI (`GET /api/provider-auth/status`). No broadcast: the model-
+      // selector dropdown lives on the independent `models_list` channel
+      // which is per-session-broadcast already; per-session updates are
+      // self-healing without a global wipe.
+      // See changes: replace-hardcoded-provider-lists,
+      //              fix-providers-list-spurious-models-refreshed,
+      //              simplify-model-selection-channels.
+      setCatalogueForSession(sessionId, msg.providers);
     }
 
     if (msg.type === "roles_list") {

@@ -1,10 +1,22 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import {
+  setCatalogueForSession,
+  _resetForTests as resetCatalogueCache,
+} from "../provider-catalogue-cache.js";
+import type { ProviderInfo } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 
-// We test by importing the module and using a temp directory
-// Since the module uses hardcoded paths, we mock fs operations
+// API-key rows are derived from the bridge-pushed catalogue cache.
+// See change: replace-hardcoded-provider-lists.
+const FIXTURE_CATALOGUE: ProviderInfo[] = [
+  { id: "anthropic", displayName: "Anthropic", hasOAuth: true, configured: false },
+  { id: "openai", displayName: "OpenAI", hasOAuth: false, configured: false },
+  { id: "deepseek", displayName: "DeepSeek", hasOAuth: false, configured: false },
+  { id: "groq", displayName: "Groq", hasOAuth: false, configured: false },
+  { id: "zai", displayName: "Z.ai", hasOAuth: false, configured: false },
+];
 
 describe("provider-auth-storage", () => {
   const authDir = path.join(os.homedir(), ".pi", "agent");
@@ -12,25 +24,23 @@ describe("provider-auth-storage", () => {
   let originalContent: string | null = null;
 
   beforeEach(() => {
-    // Backup existing auth.json
     try {
       originalContent = fs.readFileSync(authPath, "utf-8");
     } catch {
       originalContent = null;
     }
+    setCatalogueForSession("test-session", FIXTURE_CATALOGUE);
   });
 
   afterEach(() => {
-    // Restore original auth.json
     if (originalContent !== null) {
       fs.writeFileSync(authPath, originalContent);
     }
+    resetCatalogueCache();
   });
 
   it("readAuthJson returns empty object when file does not exist", async () => {
-    // Use dynamic import to get fresh module
     const { readAuthJson } = await import("../provider-auth-storage.js");
-    // readAuthJson handles ENOENT gracefully
     const result = readAuthJson();
     expect(typeof result).toBe("object");
   });
@@ -41,7 +51,6 @@ describe("provider-auth-storage", () => {
     writeCredential("test-provider", cred);
     const data = readAuthJson();
     expect(data["test-provider"]).toEqual(cred);
-    // Cleanup
     const { removeCredential } = await import("../provider-auth-storage.js");
     removeCredential("test-provider");
   });
@@ -54,10 +63,9 @@ describe("provider-auth-storage", () => {
     expect(data["test-remove"]).toBeUndefined();
   });
 
-  it("getAuthStatus returns all providers", async () => {
+  it("getAuthStatus includes the 5 OAuth handlers", async () => {
     const { getAuthStatus } = await import("../provider-auth-storage.js");
     const statuses = getAuthStatus();
-    // Should have at least the 5 OAuth providers
     const oauthIds = statuses.filter((s) => s.flowType !== "api_key").map((s) => s.id);
     expect(oauthIds).toContain("anthropic");
     expect(oauthIds).toContain("openai-codex");
@@ -66,13 +74,20 @@ describe("provider-auth-storage", () => {
     expect(oauthIds).toContain("google-antigravity");
   });
 
-  it("getAuthStatus includes zai provider with flowType api_key", async () => {
+  it("getAuthStatus includes zai from the bridge-pushed catalogue with flowType api_key", async () => {
     const { getAuthStatus } = await import("../provider-auth-storage.js");
     const statuses = getAuthStatus();
     const zai = statuses.find((s) => s.id === "zai");
     expect(zai).toBeDefined();
     expect(zai!.name).toBe("Z.ai");
     expect(zai!.flowType).toBe("api_key");
+  });
+
+  it("OAuth/api-key collision uses '<id>-api' suffix for API-key row", async () => {
+    const { getAuthStatus } = await import("../provider-auth-storage.js");
+    const statuses = getAuthStatus();
+    expect(statuses.find((s) => s.id === "anthropic" && s.flowType === "auth_code")).toBeDefined();
+    expect(statuses.find((s) => s.id === "anthropic-api" && s.flowType === "api_key")).toBeDefined();
   });
 
   it("masking shows first 5 + ... + last 3 for keys >= 12 chars", async () => {
@@ -110,5 +125,21 @@ describe("provider-auth-storage", () => {
     } finally {
       removeCredential("openai");
     }
+  });
+
+  it("empty catalogue + no OAuth credentials → only OAuth handler rows present", async () => {
+    resetCatalogueCache();
+    const { getAuthStatus } = await import("../provider-auth-storage.js");
+    const statuses = getAuthStatus();
+    expect(statuses.filter((s) => s.flowType === "api_key")).toHaveLength(0);
+    expect(statuses.filter((s) => s.flowType !== "api_key")).toHaveLength(5);
+  });
+
+  it("resolveAuthJsonKey strips '-api' suffix for OAuth-collision ids", async () => {
+    const { resolveAuthJsonKey } = await import("../provider-auth-storage.js");
+    expect(resolveAuthJsonKey("anthropic-api")).toBe("anthropic");
+    expect(resolveAuthJsonKey("anthropic")).toBe("anthropic");
+    expect(resolveAuthJsonKey("openai")).toBe("openai");
+    expect(resolveAuthJsonKey("unknown-api")).toBe("unknown-api"); // bare passthrough; "unknown" not in OAuth set
   });
 });

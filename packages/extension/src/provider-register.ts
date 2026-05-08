@@ -15,6 +15,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { ProviderInfo } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 
 // -- Types ----------------------------------------------------------------
 
@@ -288,6 +289,122 @@ export function getSessionInfo(): { provider: string; modelId: string } {
   return { provider: currentSessionProvider, modelId: currentSessionModelId };
 }
 
+// -- Provider catalogue (for dashboard /api/provider-auth/status) -------
+//
+// Pure derivation: given a captured `ModelRegistry` and the pi-ai
+// helpers (`findEnvKeys`, `getEnvApiKey`), build a flat ProviderInfo[]
+// covering every OAuth provider plus every distinct provider id from
+// `getAll()`. The bridge pushes this to the server alongside
+// `models_list`. See change: replace-hardcoded-provider-lists.
+
+type PiAiHelpers = {
+  findEnvKeys?: (id: string) => string[] | undefined;
+  getEnvApiKey?: (id: string) => string | undefined;
+};
+
+export function _buildProviderCatalogue(
+  modelRegistry: any,
+  piAi: PiAiHelpers,
+  customIds: ReadonlySet<string> = new Set(),
+): ProviderInfo[] {
+  if (!modelRegistry) return [];
+  const oauthIds = new Set<string>(
+    (modelRegistry.authStorage?.getOAuthProviders?.() ?? []).map((p: any) => p.id),
+  );
+  // The catalogue is the complete picture of what pi knows about —
+  // built-in providers, OAuth providers, AND custom providers registered
+  // by the dashboard via pi.registerProvider() from ~/.pi/agent/providers.json.
+  // Custom providers carry `custom: true` so consumers can decide what
+  // to surface where (e.g. the auth UI suppresses their API-key rows
+  // because they're managed by the LLM Providers settings section).
+  // Filtering decisions belong to consumers, not to this function.
+  // See change: replace-hardcoded-provider-lists.
+  const allIds = new Set<string>(oauthIds);
+  for (const m of (modelRegistry.getAll?.() ?? []) as Array<{ provider?: string }>) {
+    if (m.provider) allIds.add(m.provider);
+  }
+  return [...allIds].map((id) => {
+    let displayName = id;
+    try {
+      displayName = modelRegistry.getProviderDisplayName?.(id) ?? id;
+    } catch { /* fallback to id */ }
+    let configured = false;
+    let source: ProviderInfo["source"];
+    try {
+      const status = modelRegistry.authStorage?.getAuthStatus?.(id);
+      if (status) {
+        configured = !!status.configured;
+        source = status.source;
+      }
+    } catch { /* ignore */ }
+    let expires: number | undefined;
+    try {
+      const cred = modelRegistry.authStorage?.get?.(id);
+      if (cred?.type === "oauth" && typeof cred.expires === "number") {
+        expires = cred.expires;
+      }
+    } catch { /* ignore */ }
+    let envVar: string | undefined;
+    let ambient: boolean | undefined;
+    try {
+      const keys = piAi.findEnvKeys?.(id);
+      if (keys && keys.length > 0) envVar = keys[0];
+      if (piAi.getEnvApiKey?.(id) === "<authenticated>") ambient = true;
+    } catch { /* ignore */ }
+    return {
+      id,
+      displayName,
+      hasOAuth: oauthIds.has(id),
+      configured,
+      source,
+      envVar,
+      ambient,
+      expires,
+      custom: customIds.has(id) || undefined,
+    };
+  });
+}
+
+// Lazy-cached pi-ai module (in scope inside pi's process).
+let _piAiModule: PiAiHelpers | null = null;
+let _piAiLoadAttempted = false;
+async function loadPiAi(): Promise<PiAiHelpers> {
+  if (_piAiModule) return _piAiModule;
+  if (_piAiLoadAttempted) return {};
+  _piAiLoadAttempted = true;
+  try {
+    const mod: any = await import("@mariozechner/pi-ai");
+    _piAiModule = { findEnvKeys: mod.findEnvKeys, getEnvApiKey: mod.getEnvApiKey };
+    return _piAiModule;
+  } catch {
+    return {};
+  }
+}
+
+// Eagerly kick off pi-ai load at module import time so env-var hints
+// are populated by the time the first session_register fires. Failure
+// is silent; `buildProviderCatalogue` falls back to {} which still
+// produces a valid catalogue minus envVar/ambient hints.
+void loadPiAi();
+
+/**
+ * Public wrapper: returns the current provider catalogue, or [] when
+ * the model registry has not been captured yet. Marks providers the
+ * bridge itself registered (from `~/.pi/agent/providers.json` via
+ * `pi.registerProvider()`) with `custom: true` so consumers can
+ * suppress their API-key auth rows (those are managed by the LLM
+ * Providers settings section). The catalogue itself is complete —
+ * including custom providers — so other consumers (e.g. diagnostics)
+ * see the full picture.
+ */
+export function buildProviderCatalogue(): ProviderInfo[] {
+  const mr = getModelRegistry();
+  if (!mr) return [];
+  const piAi = _piAiModule ?? {};
+  const customIds = new Set<string>(lastRegistered.keys());
+  return _buildProviderCatalogue(mr, piAi, customIds);
+}
+
 export function getModelDisplayName(modelId: string): string {
   if (piRef) {
     const data: any = {};
@@ -319,6 +436,20 @@ function getModelRegistry(): any {
 // -- Provider registration (with auto-discovery) --------------------------
 
 async function registerEntry(pi: ExtensionAPI, name: string, entry: ProviderEntry): Promise<number> {
+  // Record snapshot SYNCHRONOUSLY before awaiting discovery so the very
+  // first providers_list push (typically fired from `session_start`
+  // shortly after `activate()` kicked off async registerEntry calls) carries
+  // the correct `custom: true` flags. Otherwise a slow / unreachable
+  // /v1/models endpoint causes custom providers from
+  // `~/.pi/agent/providers.json` to leak into Settings → Provider
+  // Authentication → API Keys until the discovery probe resolves.
+  // See change: fix-custom-provider-flag-race.
+  lastRegistered.set(name, {
+    baseUrl: entry.baseUrl,
+    apiKey: entry.apiKey,
+    api: entry.api ?? "openai-completions",
+  });
+
   const discovered = await discoverModels(entry.baseUrl, entry.apiKey);
 
   // Metadata (contextWindow, maxTokens, reasoning, cost, input) is resolved
@@ -345,13 +476,6 @@ async function registerEntry(pi: ExtensionAPI, name: string, entry: ProviderEntr
     apiKey: resolveApiKeyEnvName(name, entry.apiKey),
     api: (entry.api ?? "openai-completions") as any,
     models,
-  });
-
-  // Record snapshot so reloadProviders can detect subsequent changes.
-  lastRegistered.set(name, {
-    baseUrl: entry.baseUrl,
-    apiKey: entry.apiKey,
-    api: entry.api ?? "openai-completions",
   });
 
   // Notify bridge directly (same package — no cross-package event needed)

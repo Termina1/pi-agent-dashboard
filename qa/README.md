@@ -135,6 +135,11 @@ The Packer macOS template uses `vmware-vmx` builder (starts from existing VM) ra
 3. **WebSocket** — Connections to pi gateway (9999) and browser WS gateway succeed
 4. **Terminal** — PTY spawning works (ConPTY on Windows, pty on Unix)
 5. **Git operations** — Branch listing works from server API
+6. **Electron ZIP V2 bootstrap (Windows only)** — `qa/tests/07-electron-bootstrap-v2.ps1`. Extracts the production `PI-Dashboard-win32-x64.zip`, launches `pi-dashboard.exe`, waits for `/api/health`, asserts `starter==Electron` and that `~\.pi-dashboard\` is populated with the version marker, `pi-coding-agent` from the offline cacache, and an intact `cliPath` (catches the cpSync-symlink and npm-pruning regression class). Skips when the ZIP artifact is absent.
+
+   **Uploading the ZIP to the test VM**: `qa/scripts/run-test.sh` looks for `packages/electron/out/make/zip/x64/PI-Dashboard-win32-x64.zip` by default and `scp`s it to `C:\qa-artifacts\` before running the test suite. Override with `QA_ELECTRON_ZIP=/path/to/zip make test-windows`.
+
+7. **Electron real-launch smoke (Linux)** — `qa/tests/08-electron-real-launch.sh`. Launches AppImage under `xvfb-run --no-sandbox`. Asserts `/api/health` 200 within 90s, `starter==Electron`, `~/.pi/dashboard/server.log` non-empty, no `FATAL` substring in Electron parent stdout. Catches v0.4.6 regression class: jiti-FATAL on degraded managed dir + `spawnDetached` `stdio[1]='ignore'` producing 0-byte logs. Skips when AppImage artifact absent under `packages/electron/out/make/` (run `npm run make` to build). Requires `xvfb` on QA VM (provisioned via `qa/packer/scripts/provision-linux.sh`).
 
 ## Directory Structure
 
@@ -173,6 +178,7 @@ qa/
 │   ├── 03-websocket.sh         # WebSocket connection test
 │   ├── 04-terminal.sh          # Terminal spawning test
 │   ├── 05-git-ops.sh           # Git operations test
+│   ├── 08-electron-real-launch.sh # Real Electron launch smoke. xvfb + AppImage. Skips when AppImage absent.
 │   ├── run-all.sh              # Run all tests, report results
 │   └── *.ps1                   # Windows PowerShell equivalents
 ├── iso/                        # ISOs (gitignored)

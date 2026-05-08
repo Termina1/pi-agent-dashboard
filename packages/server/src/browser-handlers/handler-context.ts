@@ -16,6 +16,7 @@ import type { HeadlessPidRegistry } from "../headless-pid-registry.js";
 import type { PendingResumeRegistry } from "../pending-resume-registry.js";
 import type { PendingAttachRegistry } from "../pending-attach-registry.js";
 import type { PendingResumeIntentRegistry } from "../pending-resume-intent-registry.js";
+import type { PendingClientCorrelations } from "../pending-client-correlations.js";
 
 export interface BrowserHandlerContext {
   ws: WebSocket;
@@ -43,6 +44,14 @@ export interface BrowserHandlerContext {
    * See change: preserve-session-order-on-reboot.
    */
   pendingResumeIntents?: PendingResumeIntentRegistry;
+  /**
+   * Optional registry mapping `spawnToken → requestId` for client-side
+   * correlation. When set, browser-initiated spawns/resumes that carry a
+   * `requestId` are recorded so the eventual `session_added` broadcast
+   * carries `spawnRequestId` for auto-select / placeholder dismissal.
+   * See change: spawn-correlation-token.
+   */
+  pendingClientCorrelations?: PendingClientCorrelations;
   /** Send message to a specific WebSocket */
   sendTo(ws: WebSocket, msg: ServerToBrowserMessage): void;
   /** Broadcast to all connected browsers */

@@ -342,6 +342,41 @@ export interface ModelInfo {
   id: string;
 }
 
+/**
+ * Provider catalogue entry pushed by the bridge to the server.
+ * Derived from pi's live `ModelRegistry` (see provider-register.ts in
+ * the bridge). The server caches the most recently received catalogue
+ * and uses it as the source for `GET /api/provider-auth/status`.
+ * See change: replace-hardcoded-provider-lists.
+ */
+export interface ProviderInfo {
+  /** pi-ai provider id (e.g. "anthropic", "deepseek", "google-vertex"). */
+  id: string;
+  /** From `modelRegistry.getProviderDisplayName(id)`; falls back to id. */
+  displayName: string;
+  /** True iff `authStorage.getOAuthProviders()` includes this id. */
+  hasOAuth: boolean;
+  /** True iff a credential is stored in auth.json. */
+  configured: boolean;
+  /** Where the credential is sourced from, when configured. */
+  source?: "stored" | "environment" | "fallback" | "runtime";
+  /** First env var name pi-ai consults for this provider, when applicable. */
+  envVar?: string;
+  /** True when configured via ambient credential chain (AWS profile / GCP ADC). */
+  ambient?: boolean;
+  /** Expiry timestamp for OAuth credentials. */
+  expires?: number;
+  /**
+   * True when this provider was registered by the dashboard itself via
+   * `pi.registerProvider()` from `~/.pi/agent/providers.json` (a "custom"
+   * provider managed by the LLM Providers settings section). Consumers
+   * use this to suppress API-key auth rows for custom providers — their
+   * keys are managed elsewhere. OAuth rows are still emitted because a
+   * custom OAuth provider needs its login button.
+   */
+  custom?: boolean;
+}
+
 /** Role assignment info (from pi-flows role-manager) */
 export interface RoleInfo {
   roles: Record<string, string>;
@@ -392,6 +427,19 @@ export function deriveChangeState(change: OpenSpecChange): ChangeState {
 export interface OpenSpecData {
   initialized: boolean;
   changes: OpenSpecChange[];
+  /**
+   * Cold-boot signaling: server has detected `openspec/changes/` for this
+   * cwd but the slow poll has not yet produced authoritative data.
+   *
+   * Optional for backwards compatibility — absence means `false`. Composes
+   * with `initialized` to encode three states:
+   *   - { initialized: false, pending: false } → no openspec dir
+   *   - { initialized: false, pending: true  } → dir exists, polling
+   *   - { initialized: true,  pending: ?     } → poll complete
+   *
+   * See change: fix-cold-boot-openspec-protocol.
+   */
+  pending?: boolean;
 }
 
 /** OpenSpec workflow phase detected from tool calls */
@@ -601,4 +649,11 @@ export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
+  /**
+   * Optional structured failure-classifier code paired with `error`.
+   * Lets clients render specific UI for known failure modes
+   * (e.g., `"FORK_EMPTY_SESSION"`).
+   * See change: fix-fork-empty-session-silent-timeout.
+   */
+  code?: string;
 }

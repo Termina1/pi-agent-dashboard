@@ -445,7 +445,13 @@ jobs:
             node_modules/@pengx17/electron-forge-maker-appimage/scripts/patch-apprun.sh
 
       - name: Make Electron distributables
-        if: "!(matrix.platform == 'win32' && matrix.arch == 'arm64')"
+        # Skip for all Windows: forge.config.ts has no Windows maker (NSIS
+        # removed in change `simplify-electron-bootstrap-derived-state`).
+        # Windows packaging goes through `forge package` + the dedicated
+        # "Build Windows ZIP and portable exe" step below. Without this
+        # exclusion, win32-x64 fails with "Could not find any make targets
+        # configured for the win32 platform" (run 25410899936 win32-x64 leg).
+        if: matrix.platform != 'win32'
         # MACOSX_DEPLOYMENT_TARGET pins the Mach-O minos for every binary the
         # build produces (Electron framework, custom binaries, any source-
         # compiled native module). Set unconditionally — it's a no-op on
@@ -545,12 +551,16 @@ jobs:
           hdiutil detach "$MOUNT_POINT" -quiet || true
           echo "✓ Deployment target floor verified: 10.15"
 
-      - name: Package Electron (Windows arm64 — no NSIS cross-compile)
-        if: matrix.platform == 'win32' && matrix.arch == 'arm64'
+      - name: Package Electron (Windows — no maker configured)
+        # Runs for both win32-x64 and win32-arm64. forge.config.ts has no
+        # Windows maker, so we use `forge package` to produce the unpacked
+        # app dir at `out/PI-Dashboard-win32-<arch>/`. The next step
+        # ("Build Windows ZIP and portable exe") consumes that dir.
+        if: matrix.platform == 'win32'
         shell: pwsh
         run: |
           Set-Location packages\electron
-          ..\..\node_modules\.bin\electron-forge.cmd package --arch=arm64 --platform=win32
+          ..\..\node_modules\.bin\electron-forge.cmd package --arch=${{ matrix.arch }} --platform=win32
           Write-Host "Packaged output:"
           Get-ChildItem out\ -ErrorAction SilentlyContinue | Format-Table
 
@@ -570,7 +580,8 @@ jobs:
           $zipDir = "packages/electron/out/make/zip/$arch"
           New-Item -ItemType Directory -Force -Path $zipDir
           Compress-Archive -Path $packaged -DestinationPath "$zipDir/PI-Dashboard-win32-$arch.zip"
-          # Portable exe via electron-builder
+          # Portable exe (7-Zip SFX via electron-builder — no NSIS required)
+          # See change: simplify-electron-bootstrap-derived-state.
           cd packages/electron
           npx electron-builder --win portable --$arch `
             --prepackaged "out/PI-Dashboard-win32-$arch" `

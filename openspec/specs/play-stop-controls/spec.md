@@ -1,7 +1,9 @@
-## MODIFIED Requirements
+## Purpose
 
+Give the user a single inline control to interrupt an in-flight session: send `abort` first; escalate to `force_kill` after a grace period if the agent does not quiesce.
+## Requirements
 ### Requirement: Stop button during streaming
-A red Stop button (■) SHALL appear at the end of the input field when the session is streaming OR when a pending prompt exists. When clicked, it SHALL send an `abort` message and transition to a "Force Stop" state.
+A red Stop button (■) SHALL appear at the end of the input field when the session is streaming OR when a pending prompt exists OR when `SessionState.retryState` is set. When clicked, it SHALL send an `abort` message and transition to a "Force Stop" state.
 
 #### Scenario: Stop button visible during streaming
 - **WHEN** the session status is "streaming"
@@ -11,17 +13,29 @@ A red Stop button (■) SHALL appear at the end of the input field when the sess
 - **WHEN** a `pendingPrompt` exists on the session state
 - **THEN** a red Stop button is visible next to the Play button
 
+#### Scenario: Stop button visible during retry phase
+- **WHEN** `SessionState.retryState` is set (an LLM-provider retry is in flight)
+- **THEN** a red Stop button is visible next to the Play button
+- **AND** the Stop button SHALL remain visible even when `isStreaming` is briefly false between retries
+
 #### Scenario: Stop button hidden when idle
-- **WHEN** the session status is "idle" or "ended" AND no `pendingPrompt` exists
+- **WHEN** the session status is "idle" or "ended" AND no `pendingPrompt` exists AND `retryState` is undefined
 - **THEN** the Stop button is not visible
 
 #### Scenario: Stop button sends abort
 - **WHEN** user clicks the Stop button while session is streaming
 - **THEN** an `abort` message is sent to the session
-- **AND** the button transitions to "Force Stop" state (orange, pulsing animation)
+- **AND** the button transitions to "Force Stop" state (orange, pulsing animation) only after the 3 s grace period elapses without the session quiescing
 
-#### Scenario: Force Stop button visible after abort
-- **WHEN** an abort has been sent AND the session is still streaming
+#### Scenario: Stop button during retry sleep clears retryState within 200ms
+- **GIVEN** the session has `retryState` set
+- **WHEN** user clicks the Stop button
+- **THEN** an `abort` message SHALL be sent
+- **AND** within 200 ms (perceived) the bridge's synthesized `auto_retry_end` SHALL clear `retryState` in the client
+- **AND** if the session does not transition to idle within 3 s the button SHALL escalate to Force Stop
+
+#### Scenario: Force Stop button visible after abort grace period
+- **WHEN** an abort has been sent AND the session is still active (streaming OR retryState set) after a 3 s grace period
 - **THEN** an orange pulsing "Force Stop" button (⚠) SHALL be displayed instead of the red Stop button
 
 #### Scenario: Force Stop sends force_kill
@@ -30,7 +44,7 @@ A red Stop button (■) SHALL appear at the end of the input field when the sess
 - **AND** the button transitions to "Killing..." state (non-interactive)
 
 #### Scenario: Button resets when session stops streaming
-- **WHEN** the session status changes away from "streaming"
+- **WHEN** the session status changes away from "streaming" AND `retryState` is undefined
 - **THEN** the button state resets to initial (no abort/force-kill state)
 
 ### Requirement: Killing state feedback
@@ -43,3 +57,4 @@ When a force kill has been initiated, the button SHALL show a "Killing..." label
 #### Scenario: Killing state clears on session end
 - **WHEN** the session status changes to "ended" after a force kill
 - **THEN** the button SHALL be hidden (standard behavior for ended sessions)
+

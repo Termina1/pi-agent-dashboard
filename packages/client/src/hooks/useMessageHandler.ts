@@ -63,6 +63,13 @@ export interface MessageHandlerDeps {
   lastCreatedTerminalIdRef: React.MutableRefObject<string | null>;
   maxSeqMapRef: React.MutableRefObject<Map<string, number>>;
   selectedSessionIdRef: React.MutableRefObject<string | undefined>;
+  /**
+   * Maps client-minted requestId → originating click metadata. Consumed in
+   * `case "session_added"` (when `msg.spawnRequestId` matches an entry,
+   * navigate to the new session) and in `case "spawn_result"` failure (when
+   * `msg.requestId` matches, drop the entry). See change: spawn-correlation-token.
+   */
+  pendingSpawnsRef: React.MutableRefObject<Map<string, { cwd: string; kind: "spawn" | "resume" }>>;
 }
 
 export function useMessageHandler(
@@ -75,7 +82,7 @@ export function useMessageHandler(
     setSessionOrderMap, setPinnedDirectories, setTerminals, setEditorStatuses,
     setDiscoveredServers, setSpawnErrors, setResumeErrors,
   } = setters;
-  const { send, navigate, clearSpawningCwd, spawningCwdsRef, subscribedRef, pendingTerminalCwdRef, lastCreatedTerminalIdRef, maxSeqMapRef, selectedSessionIdRef } = deps;
+  const { send, navigate, clearSpawningCwd, spawningCwdsRef, subscribedRef, pendingTerminalCwdRef, lastCreatedTerminalIdRef, maxSeqMapRef, selectedSessionIdRef, pendingSpawnsRef } = deps;
 
   return useCallback((msg: ServerToBrowserMessage) => {
     switch (msg.type) {
@@ -92,7 +99,18 @@ export function useMessageHandler(
           }
           return next;
         });
-        if (spawningCwdsRef.current.has(msg.session.cwd)) {
+        // Tier 1: exact correlation by spawnRequestId. Works for both
+        // spawn-from-folder and fork-from-card (closes the no-auto-select-
+        // after-fork UX gap). See change: spawn-correlation-token.
+        if (msg.spawnRequestId && pendingSpawnsRef.current.has(msg.spawnRequestId)) {
+          const entry = pendingSpawnsRef.current.get(msg.spawnRequestId)!;
+          pendingSpawnsRef.current.delete(msg.spawnRequestId);
+          if (entry.kind === "spawn" && entry.cwd) clearSpawningCwd(entry.cwd);
+          navigate(`/session/${msg.session.id}`);
+        } else if (spawningCwdsRef.current.has(msg.session.cwd)) {
+          // Tier 2 (legacy fallback): cwd-based heuristic for older servers
+          // that don't echo spawnRequestId. Only fires for spawn (not fork)
+          // because fork dispatches don't add to spawningCwds today.
           clearSpawningCwd(msg.session.cwd);
           navigate(`/session/${msg.session.id}`);
         }
@@ -302,12 +320,28 @@ export function useMessageHandler(
             next.set(msg.sessionId, msg.message ?? "Resume failed");
             return next;
           });
+          // Drop the pending-spawn entry on failure so a stale entry can't
+          // mis-route a later session_added. See change: spawn-correlation-token.
+          if (msg.requestId) pendingSpawnsRef.current.delete(msg.requestId);
         } else {
           setResumeErrors((prev) => {
             const next = new Map(prev);
             next.delete(msg.sessionId);
             return next;
           });
+          // FORK_DEGRADED_TO_NEW: source session had no persisted history,
+          // so the server silently spawned a fresh session in the same cwd
+          // instead of forking. Surface the substitution as a non-blocking
+          // toast via the existing spawn-result slot.
+          // See change: fix-fork-empty-session-silent-timeout.
+          if (msg.code === "FORK_DEGRADED_TO_NEW") {
+            setSpawnResult({ success: true, message: msg.message ?? "Started a fresh session." });
+          }
+          // For continue mode, the same sessionId is reused — navigate now
+          // since session_added might not fire (status update only).
+          // For fork mode, leave the entry alive: session_added will arrive
+          // for the new fork sessionId and trigger auto-navigate.
+          // See change: spawn-correlation-token.
         }
         break;
 
@@ -323,6 +357,10 @@ export function useMessageHandler(
             }
             return next;
           });
+          // Drop the pending-spawn entry on failure (matched by requestId
+          // when echoed; otherwise leave to be cleaned up by the 30s timeout).
+          // See change: spawn-correlation-token.
+          if (msg.requestId) pendingSpawnsRef.current.delete(msg.requestId);
         } else {
           // Successful spawn clears error AND timeout banners for this cwd.
           setSpawnErrors((prev) => {
@@ -567,11 +605,16 @@ export function useMessageHandler(
         setDiscoveredServers(msg.servers as DiscoveredServerInfo[]);
         break;
 
+      // `models_refreshed` was a global signal that wiped modelsMap and
+      // re-requested only for the selected session, leaving previously-
+      // visited sessions in `subscribedRef` with empty model lists. The
+      // signal is gone (see change: simplify-model-selection-channels):
+      // each bridge pushes its own `models_list` per-session on credential
+      // changes, so modelsMap is updated incrementally without a wipe.
+      // The case is preserved as a no-op for protocol-compatibility with
+      // older bridges that may still emit it; deleting the case would
+      // throw on receipt under strict-union message handlers.
       case "models_refreshed":
-        setModelsMap(new Map());
-        if (selectedSessionIdRef.current) {
-          send({ type: "request_models", sessionId: selectedSessionIdRef.current });
-        }
         break;
 
       // ── Extension UI System (Phase 1) ──

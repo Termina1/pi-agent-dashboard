@@ -12,9 +12,19 @@ export interface IdleTimer {
   setStopFn(fn: () => Promise<void>): void;
 }
 
+/**
+ * Predicate that returns true when one or more terminal PTYs are alive.
+ * The idle timer SHALL NOT shut down while terminals are active — a user
+ * with a long-running command (cargo build, tail -f, etc.) and no
+ * attached agent still expects the server to stay up.
+ * See change: fix-terminal-half-height-dual-mount.
+ */
+export type HasActiveTerminals = () => boolean;
+
 export function createIdleTimer(
   config: ServerConfig,
   piGateway: PiGateway,
+  hasActiveTerminals: HasActiveTerminals = () => false,
 ): IdleTimer {
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
   let stopServer: (() => Promise<void>) | null = null;
@@ -25,7 +35,11 @@ export function createIdleTimer(
     cancel();
     idleTimer = setTimeout(async () => {
       const realIdleMs = Date.now() - lastConnectionTimestamp;
-      if (piGateway.connectionCount() > 0 || realIdleMs < config.shutdownIdleSeconds * 1000) {
+      if (
+        piGateway.connectionCount() > 0 ||
+        realIdleMs < config.shutdownIdleSeconds * 1000 ||
+        hasActiveTerminals()
+      ) {
         start();
         return;
       }

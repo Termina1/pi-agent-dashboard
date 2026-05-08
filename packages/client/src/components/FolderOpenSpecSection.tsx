@@ -33,6 +33,27 @@ export function FolderOpenSpecSection({ data, cwd, onRefresh, onReadArtifact, se
   // See change: add-folder-task-checker-and-spawn-attach.
   const [tasksOpenForChange, setTasksOpenForChange] = useState<string | null>(null);
 
+  // Cold-boot signaling: openspec dir detected for this cwd but the slow
+  // poll has not yet returned. Render a small grey spinner where the
+  // collapsed `OPENSPEC (N CHANGES)` label normally goes; suppress all
+  // controls; section is non-expandable. Header layout matches the
+  // populated header to avoid layout shift on transition.
+  // See change: fix-cold-boot-openspec-protocol.
+  if (!data.initialized && data.pending) {
+    return (
+      <div data-testid="folder-openspec-section-pending" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-1.5 mt-1 ml-5">
+          <span
+            className="inline-block h-2.5 w-2.5 rounded-full border border-[var(--text-tertiary)] border-t-transparent animate-spin"
+            data-testid="folder-openspec-pending-spinner"
+            aria-label="OpenSpec loading"
+          />
+          <span className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase">OpenSpec</span>
+        </div>
+      </div>
+    );
+  }
+
   if (!data.initialized) return null;
 
   const sortedChanges = [

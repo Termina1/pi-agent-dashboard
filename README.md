@@ -4,12 +4,24 @@
 [![npm](https://img.shields.io/npm/v/@blackbelt-technology/pi-agent-dashboard)](https://www.npmjs.com/package/@blackbelt-technology/pi-agent-dashboard)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A web-based dashboard for monitoring and interacting with [pi](https://github.com/badlogic/pi-mono) agent sessions from any browser, including mobile.
+**One browser tab to command an army of [pi](https://github.com/badlogic/pi-mono) agents.** Spawn parallel sessions, watch reasoning live, attach OpenSpec changes, ship work — from your laptop or phone.
 
 🌐 **Website & demo:** [blackbelttechnology.github.io/pi-agent-dashboard](https://blackbelttechnology.github.io/pi-agent-dashboard) — animated tour, screenshots, and install guide.
 📝 **Changelog:** [`CHANGELOG.md`](CHANGELOG.md)
 
 > **Note:** This dashboard only works with [pi](https://github.com/badlogic/pi-mono). Oh My Pi is **not** supported.
+
+---
+
+## Screenshots
+
+<table>
+<tr>
+<td width="33%" align="center"><a href="docs/screenshots/readme-overview.png"><img src="docs/screenshots/readme-overview.png" alt="Sessions overview — folders, branches, OpenSpec changes, live token spend" /></a><br/><sub><b>Overview</b> — sessions grouped by folder, branch & OpenSpec context, live cost</sub></td>
+<td width="33%" align="center"><a href="docs/screenshots/readme-session.png"><img src="docs/screenshots/readme-session.png" alt="Active session — chat, attached OpenSpec change, ask_user prompt, token gauge" /></a><br/><sub><b>Session</b> — chat, OpenSpec apply, interactive <code>ask_user</code>, context gauge</sub></td>
+<td width="33%" align="center"><a href="docs/screenshots/readme-settings.png"><img src="docs/screenshots/readme-settings.png" alt="Settings — ports, spawn strategy, tunnel, resolved tools table" /></a><br/><sub><b>Settings</b> — ports, spawn strategy, zrok tunnel, tool resolution</sub></td>
+</tr>
+</table>
 
 ---
 
@@ -44,7 +56,7 @@ Download a pre-built installer from [GitHub Releases](https://github.com/BlackBe
 |----------|----------|
 | **macOS** (Apple Silicon / Intel) | `.dmg` (arm64 / x64) |
 | **Linux** (x64 / ARM64) | `.deb` or `.AppImage` |
-| **Windows** (x64 / ARM64) | `.exe` (NSIS), `.zip`, or portable `.exe` |
+| **Windows** (x64 / ARM64) | `.zip` |
 
 On first launch a setup wizard walks you through mode selection (standalone vs. power-user), API key / OAuth sign-in, and [recommended extensions](#recommended-extensions). The standalone mode bundles Node.js and auto-installs pi + dashboard + openspec into `~/.pi-dashboard/` — **no terminal, npm, or Node.js required**.
 
@@ -271,6 +283,10 @@ The file is deliberately separate from `config.json` so machine-specific paths d
 ### Auto-start (default)
 
 The bridge extension **automatically starts the dashboard server** when pi launches if it's not already running. Disable with `"autoStart": false` in `~/.pi/dashboard/config.json`.
+
+In the Electron app, if the initial launch attempts fail (or the server is stopped externally), the **loading page exposes a Start server button**, an **Open Doctor link**, and a collapsible **Server log** panel showing the last 20 lines of `~/.pi/dashboard/server.log`. The system tray menu also includes a **Start server / Restart server** item that reflects current server state. All entry points share a single idempotent launch routine in the Electron main process.
+
+**Doctor diagnostics.** Help → Doctor (or the loading-page link) opens a styled `BrowserWindow` (`doctor.html`) that runs the same checks the Electron app already performed — grouped into sections (Runtime, Pi, Server, Bundles, Diagnostics) with status pills, paths, and per-row suggestion callouts; toolbar offers Re-run, Copy as Markdown / Plain, Open server log, Open doctor log, Run setup wizard. The web client exposes the portable subset at **Settings → Diagnostics**, which fetches `/api/doctor` and renders the same sections (Electron-only rows omitted). Both surfaces share `packages/shared/src/doctor-core.ts`, so a check defined once shows up everywhere.
 
 ### Daemon mode
 
@@ -639,7 +655,7 @@ Output by platform:
 |----------|--------|----------|
 | macOS | `.dmg` | `packages/electron/out/make/` |
 | Linux | `.deb` + `.AppImage` | `packages/electron/out/make/` |
-| Windows | `.exe` (NSIS) + `.zip` + portable `.exe` | `packages/electron/out/make/` |
+| Windows | `.zip` | `packages/electron/out/make/` |
 
 ### Cross-platform builds (Docker)
 
@@ -648,7 +664,7 @@ From macOS or Linux, build installers for all platforms:
 ```bash
 npm run electron:build -- --all              # macOS (native) + Linux + Windows (Docker)
 npm run electron:build -- --linux            # Linux .deb + .AppImage only
-npm run electron:build -- --windows          # Windows .exe (NSIS) only
+npm run electron:build -- --windows          # Windows .zip only
 npm run electron:build -- --linux --windows  # Both, skip native
 ```
 
@@ -662,7 +678,7 @@ npm run electron:build -- --mac-both
 
 Requires Rosetta 2 (`softwareupdate --install-rosetta --agree-to-license`) so node-pty's x64 prebuilt binary can be unpacked during the cross-arch run. The script wipes per-arch caches between the two builds (`resources/.last-arch` sentinel) so back-to-back runs don't accidentally ship arm64 binaries inside an x64 DMG. Intel macs cannot cross-build arm64 locally (Rosetta is one-way) — use CI for arm64 validation.
 
-Docker builds use a Node 22 Debian container with NSIS installed for Windows cross-compilation. Output goes to `packages/electron/out/make/`.
+Docker builds use a Node 22 Debian container for Windows cross-compilation. Output goes to `packages/electron/out/make/`.
 
 ### Electron dev mode
 
@@ -717,8 +733,8 @@ This runs CI, publishes to npm with `--provenance` for supply-chain transparency
 | `macos-15-intel` | macOS x64 | `.dmg` (Intel; last GitHub-hosted x86_64 image, EOL 2027-08) |
 | `ubuntu-latest` | Linux x64 | `.deb` + `.AppImage` |
 | `ubuntu-24.04-arm` | Linux arm64 | `.deb` |
-| `windows-latest` | Windows x64 | `.exe` (NSIS) + `.zip` + portable |
-| `windows-latest` | Windows arm64 | `.zip` + portable (x64 Node.js via WoW64) |
+| `windows-latest` | Windows x64 | `.zip` |
+| `windows-latest` | Windows arm64 | `.zip` (x64 Node.js via WoW64) |
 
 All artifacts are uploaded to a **draft GitHub Release**. Release notes are extracted automatically from the matching `## [<version>]` section of [`CHANGELOG.md`](CHANGELOG.md).
 

@@ -275,7 +275,11 @@ export function createPiGateway(
 
             if (msg.type === "session_register") {
               // Clear spawn-register watchdog BEFORE any throwing logic. See change: spawn-failure-diagnostics.
+              // Priority: token > pid > cwd. Token is the strongest identity
+              // (spawn-correlation-token); pid catches headless without token;
+              // cwd is the legacy fallback for tmux/wt with neither.
               const watchdog = getSpawnRegisterWatchdog();
+              if (msg.spawnToken) watchdog.clearByToken(msg.spawnToken);
               if (msg.pid !== undefined) watchdog.clearByPid(msg.pid);
               watchdog.clearByCwd(msg.cwd);
 

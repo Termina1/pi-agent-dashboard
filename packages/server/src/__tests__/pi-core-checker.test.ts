@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -34,9 +34,22 @@ describe("PiCoreChecker._internal.looksLikePiEcosystem", () => {
 
 describe("PiCoreChecker.getStatus", () => {
 	let tmpManagedDir: string;
+	let originalOffline: string | undefined;
 
 	beforeEach(() => {
 		tmpManagedDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-core-test-"));
+		// Disable the default pi.dev fetcher in this block so existing
+		// tests (which mock fetchLatest only) aren't surprised by live
+		// network calls. The pi.dev integration tests in the next describe
+		// block inject `fetchPiDevRelease` explicitly and therefore bypass
+		// this env. See change: improve-pi-update-detection.
+		originalOffline = process.env.PI_OFFLINE;
+		process.env.PI_OFFLINE = "1";
+	});
+
+	afterEach(() => {
+		if (originalOffline !== undefined) process.env.PI_OFFLINE = originalOffline;
+		else delete process.env.PI_OFFLINE;
 	});
 
 	function writeManagedPackage(managedDir: string, name: string, version: string) {
@@ -235,4 +248,133 @@ describe("PiCoreChecker.getStatus", () => {
 		expect(status.packages[0].name).toBe("@mariozechner/pi-coding-agent");
 		expect(status.packages[1].name).toBe("@blackbelt-technology/pi-agent-dashboard");
 	});
+});
+
+describe("PiCoreChecker pi.dev integration", () => {
+	let tmpManagedDir: string;
+
+	beforeEach(async () => {
+		tmpManagedDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-core-pidev-"));
+		const { _resetDynamicPiAliases } = await import("../pi-core-checker.js");
+		_resetDynamicPiAliases();
+	});
+
+	it("prefers pi.dev for @mariozechner/pi-coding-agent latestVersion", async () => {
+		let npmCalled = false;
+		const checker = new PiCoreChecker({
+			npmList: async () =>
+				JSON.stringify({
+					dependencies: {
+						"@mariozechner/pi-coding-agent": { version: "0.70.6" },
+					},
+				}),
+			fetchLatest: async () => {
+				npmCalled = true;
+				return "0.73.1"; // npm registry says 0.73.1 …
+			},
+			fetchPiDevRelease: async () => ({ version: "0.74.0" }), // … but pi.dev says 0.74.0
+			managedDir: tmpManagedDir,
+		});
+		const status = await checker.getStatus();
+		const pi = status.packages.find((p) => p.name === "@mariozechner/pi-coding-agent")!;
+		expect(pi.latestVersion).toBe("0.74.0");
+		expect(pi.updateAvailable).toBe(true);
+		expect(npmCalled).toBe(false);
+	});
+
+	it("falls back to npm registry when pi.dev returns undefined", async () => {
+		let npmCalled = false;
+		const checker = new PiCoreChecker({
+			npmList: async () =>
+				JSON.stringify({
+					dependencies: {
+						"@mariozechner/pi-coding-agent": { version: "0.70.6" },
+					},
+				}),
+			fetchLatest: async () => {
+				npmCalled = true;
+				return "0.73.1";
+			},
+			fetchPiDevRelease: async () => undefined, // pi.dev unreachable / skipped
+			managedDir: tmpManagedDir,
+		});
+		const status = await checker.getStatus();
+		const pi = status.packages.find((p) => p.name === "@mariozechner/pi-coding-agent")!;
+		expect(pi.latestVersion).toBe("0.73.1");
+		expect(npmCalled).toBe(true);
+	});
+
+	it("falls back to npm registry when pi.dev throws", async () => {
+		const checker = new PiCoreChecker({
+			npmList: async () =>
+				JSON.stringify({
+					dependencies: {
+						"@mariozechner/pi-coding-agent": { version: "0.70.6" },
+					},
+				}),
+			fetchLatest: async () => "0.73.1",
+			fetchPiDevRelease: async () => {
+				throw new Error("network down");
+			},
+			managedDir: tmpManagedDir,
+		});
+		const status = await checker.getStatus();
+		const pi = status.packages.find((p) => p.name === "@mariozechner/pi-coding-agent")!;
+		expect(pi.latestVersion).toBe("0.73.1");
+	});
+
+	it("does NOT call pi.dev for non-pi packages", async () => {
+		let piDevCalled = false;
+		const checker = new PiCoreChecker({
+			npmList: async () =>
+				JSON.stringify({
+					dependencies: {
+						"@blackbelt-technology/pi-agent-dashboard": { version: "0.4.0" },
+					},
+				}),
+			fetchLatest: async () => "0.5.0",
+			fetchPiDevRelease: async () => {
+				piDevCalled = true;
+				return { version: "99.99.99" };
+			},
+			managedDir: tmpManagedDir,
+		});
+		const status = await checker.getStatus();
+		const dash = status.packages.find((p) => p.name === "@blackbelt-technology/pi-agent-dashboard")!;
+		expect(dash.latestVersion).toBe("0.5.0");
+		expect(piDevCalled).toBe(false);
+	});
+
+	it("records pi.dev's packageName as a trusted alias", async () => {
+		const checker = new PiCoreChecker({
+			npmList: async () =>
+				JSON.stringify({
+					dependencies: {
+						"@mariozechner/pi-coding-agent": { version: "0.70.6" },
+					},
+				}),
+			fetchLatest: async () => "0.70.6",
+			fetchPiDevRelease: async () => ({
+				version: "0.74.0",
+				packageName: "@earendil-works/pi-coding-agent",
+			}),
+			managedDir: tmpManagedDir,
+		});
+		await checker.getStatus();
+
+		// After the alias is recorded, a second discovery that finds the
+		// renamed package should accept it through the whitelist gate.
+		writeManagedPackage(tmpManagedDir, "@earendil-works/pi-coding-agent", "0.74.0");
+		checker.invalidate();
+		const status2 = await checker.getStatus();
+		const aliased = status2.packages.find((p) => p.name === "@earendil-works/pi-coding-agent");
+		expect(aliased).toBeDefined();
+		expect(aliased!.currentVersion).toBe("0.74.0");
+	});
+
+	function writeManagedPackage(managedDir: string, name: string, version: string) {
+		const dir = path.join(managedDir, "node_modules", name);
+		fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name, version }));
+	}
 });

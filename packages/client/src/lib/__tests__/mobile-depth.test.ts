@@ -10,8 +10,8 @@ describe("getMobileDepth", () => {
     expect(getMobileDepth({ selectedId: "s1" })).toBe(1);
   });
 
-  it("returns 1 when a terminal is selected", () => {
-    expect(getMobileDepth({ selectedTerminalId: "t1" })).toBe(1);
+  it("returns 1 when folderTermCwd is set (folder-terminals route)", () => {
+    expect(getMobileDepth({ folderTermCwd: "/foo" })).toBe(1);
   });
 
   it("returns 1 when settings route is active", () => {

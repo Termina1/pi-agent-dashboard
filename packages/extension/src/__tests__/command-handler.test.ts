@@ -201,6 +201,74 @@ describe("CommandHandler", () => {
     await handler.handle({ type: "abort", sessionId: "s1" } as ServerToExtensionMessage);
   });
 
+  it("abort schedules persistent-abort retries until isIdle returns true", async () => {
+    // See change: fix-provider-retry-infinite-loop.
+    vi.useFakeTimers();
+    const pi = createMockPi();
+    const abort = vi.fn();
+    let idleAfter = 3; // become idle after 3 polls
+    const isIdle = vi.fn(() => --idleAfter <= 0);
+    const handler = createCommandHandler(pi as any, "s1", { abort, isIdle, eventSink: vi.fn() });
+
+    await handler.handle({ type: "abort", sessionId: "s1" } as ServerToExtensionMessage);
+    expect(abort).toHaveBeenCalledOnce();
+
+    // Advance through the persistent-abort schedule. Each 200ms tick
+    // checks isIdle first, then calls abort if not idle.
+    vi.advanceTimersByTime(200); // tick 1: idleAfter 3→2, abort
+    vi.advanceTimersByTime(200); // tick 2: idleAfter 2→1, abort
+    vi.advanceTimersByTime(200); // tick 3: idleAfter 1→0, isIdle true, no abort, scheduler stops
+    vi.advanceTimersByTime(1000); // no more aborts
+
+    expect(abort.mock.calls.length).toBe(3); // initial + 2 retries
+    vi.useRealTimers();
+  });
+
+  it("persistent-abort scheduler stops after 2 seconds even if never idle", async () => {
+    vi.useFakeTimers();
+    const pi = createMockPi();
+    const abort = vi.fn();
+    const isIdle = vi.fn(() => false); // never idle
+    const handler = createCommandHandler(pi as any, "s1", { abort, isIdle, eventSink: vi.fn() });
+
+    await handler.handle({ type: "abort", sessionId: "s1" } as ServerToExtensionMessage);
+
+    vi.advanceTimersByTime(2500); // safely past 2s cap
+    // initial + ~10 retries (2000ms / 200ms)
+    const calls = abort.mock.calls.length;
+    expect(calls).toBeGreaterThanOrEqual(10);
+    expect(calls).toBeLessThanOrEqual(11);
+
+    // Past cap, no more calls
+    const before = abort.mock.calls.length;
+    vi.advanceTimersByTime(1000);
+    expect(abort.mock.calls.length).toBe(before);
+    vi.useRealTimers();
+  });
+
+  it("abort synthesizes auto_retry_end event after invoking abort callback (provider-retry-state)", async () => {
+    // See change: fix-provider-retry-infinite-loop.
+    const pi = createMockPi();
+    const calls: Array<{ name: string; arg?: unknown }> = [];
+    const abort = vi.fn(() => calls.push({ name: "abort" }));
+    const eventSink = vi.fn((m: unknown) => calls.push({ name: "eventSink", arg: m }));
+    const handler = createCommandHandler(pi as any, "s1", { abort, eventSink });
+
+    await handler.handle({ type: "abort", sessionId: "s1" } as ServerToExtensionMessage);
+
+    expect(abort).toHaveBeenCalledOnce();
+    expect(eventSink).toHaveBeenCalledOnce();
+    // Order: abort() first, then synthesized event
+    expect(calls[0]!.name).toBe("abort");
+    expect(calls[1]!.name).toBe("eventSink");
+    const evt = (calls[1]!.arg as any);
+    expect(evt.type).toBe("event_forward");
+    expect(evt.sessionId).toBe("s1");
+    expect(evt.event.eventType).toBe("auto_retry_end");
+    expect(evt.event.data).toEqual({ success: false, attempt: -1, finalError: "Aborted by user" });
+    expect(typeof evt.event.timestamp).toBe("number");
+  });
+
   it("should handle request_commands message", async () => {
     const pi = createMockPi();
     const handler = createCommandHandler(pi as any, "s1");

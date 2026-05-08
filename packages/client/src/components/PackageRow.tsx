@@ -13,9 +13,11 @@ import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "@mdi/react";
 import {
 	mdiAlertCircle,
+	mdiAlertCircleOutline,
 	mdiArrowUpBold,
 	mdiCheckCircle,
 	mdiDotsVertical,
+	mdiInformationOutline,
 	mdiLoading,
 	mdiSwapHorizontal,
 } from "@mdi/js";
@@ -52,6 +54,27 @@ export interface PackageRowProps {
 	moveDestinationScope?: "global" | "local";
 	/** When true, the Move button renders disabled with a tooltip. */
 	moveDisabledReason?: string;
+	/**
+	 * Number of breaking changes between the row's currentVersion and
+	 * latestVersion. Used for the breaking-state tooltip text. Hidden
+	 * tooltip detail when undefined / 0.
+	 * See change: pi-update-whats-new-panel.
+	 */
+	breakingChangeCount?: number;
+	/**
+	 * Drives the what's-new icon's visual state and visibility.
+	 * - `"breaking"` — amber alert-circle, warning tooltip with count.
+	 * - `"info"` — muted information-outline, neutral "View what's new" tooltip.
+	 * - `undefined` — icon hidden.
+	 * See change: improve-pi-update-detection.
+	 */
+	whatsNewKind?: "breaking" | "info";
+	/**
+	 * Click handler for the what's-new icon. Caller opens its
+	 * `WhatsNewDialog` here. Required for the icon to render.
+	 * See change: pi-update-whats-new-panel.
+	 */
+	onShowWhatsNew?: () => void;
 	testId?: string;
 }
 
@@ -94,6 +117,9 @@ export function PackageRow({
 	currentScope,
 	moveDestinationScope,
 	moveDisabledReason,
+	breakingChangeCount,
+	whatsNewKind,
+	onShowWhatsNew,
 	testId,
 }: PackageRowProps) {
 	const [menuOpen, setMenuOpen] = useState(false);
@@ -152,6 +178,32 @@ export function PackageRow({
 							)}
 						</span>
 					) : null}
+					{whatsNewKind && onShowWhatsNew && (
+						<button
+							onClick={onShowWhatsNew}
+							title={
+								whatsNewKind === "breaking"
+									? `${breakingChangeCount ?? 1} breaking change${(breakingChangeCount ?? 1) === 1 ? "" : "s"} since your version`
+									: "View what's new"
+							}
+							aria-label={
+								whatsNewKind === "breaking"
+									? "Breaking changes since your version \u2014 click for details"
+									: "View what's new \u2014 click to see release notes"
+							}
+							className={
+								whatsNewKind === "breaking"
+									? "p-0.5 rounded text-amber-400 hover:bg-amber-500/10"
+									: "p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
+							}
+							data-testid={testId ? `${testId}-whats-new` : undefined}
+						>
+							<Icon
+								path={whatsNewKind === "breaking" ? mdiAlertCircleOutline : mdiInformationOutline}
+								size={0.5}
+							/>
+						</button>
+					)}
 					{updateAvailable && canUpdate && onUpdate && (
 						<button
 							onClick={onUpdate}

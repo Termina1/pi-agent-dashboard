@@ -231,3 +231,86 @@ describe("HeadlessPidRegistry orphan cleanup", () => {
     killSpy.mockRestore();
   });
 });
+
+// See change: spawn-correlation-token — three-tier linking.
+describe("HeadlessPidRegistry: three-tier link", () => {
+  it("register stores the spawnToken when provided", () => {
+    const registry = createHeadlessPidRegistry({ pidFilePath: join(makeTempDir(), "pids.json") });
+    registry.register(100, "/p", mockProcess(), "tok_abc");
+    // No public accessor for the entry, but linkByToken proves storage.
+    expect(registry.linkByToken("tok_abc", "S1")).toBe(true);
+    expect(registry.getPid("S1")).toBe(100);
+  });
+
+  it("linkByToken returns false when token does not match", () => {
+    const registry = createHeadlessPidRegistry({ pidFilePath: join(makeTempDir(), "pids.json") });
+    registry.register(100, "/p", mockProcess(), "tok_abc");
+    expect(registry.linkByToken("tok_other", "S1")).toBe(false);
+    expect(registry.getPid("S1")).toBeUndefined();
+  });
+
+  it("linkByToken returns false for empty token", () => {
+    const registry = createHeadlessPidRegistry({ pidFilePath: join(makeTempDir(), "pids.json") });
+    registry.register(100, "/p", mockProcess(), "tok_abc");
+    expect(registry.linkByToken("", "S1")).toBe(false);
+  });
+
+  it("linkByToken does not relink an already-linked entry", () => {
+    const registry = createHeadlessPidRegistry({ pidFilePath: join(makeTempDir(), "pids.json") });
+    registry.register(100, "/p", mockProcess(), "tok_abc");
+    expect(registry.linkByToken("tok_abc", "S1")).toBe(true);
+    expect(registry.linkByToken("tok_abc", "S2")).toBe(false);
+    expect(registry.getPid("S1")).toBe(100);
+    expect(registry.getPid("S2")).toBeUndefined();
+  });
+
+  it("linkByPid sets sessionId on the entry with that pid", () => {
+    const registry = createHeadlessPidRegistry({ pidFilePath: join(makeTempDir(), "pids.json") });
+    registry.register(123, "/p", mockProcess());
+    expect(registry.linkByPid("S1", 123)).toBe(true);
+    expect(registry.getPid("S1")).toBe(123);
+  });
+
+  it("linkByPid returns false for unknown pid", () => {
+    const registry = createHeadlessPidRegistry({ pidFilePath: join(makeTempDir(), "pids.json") });
+    registry.register(123, "/p", mockProcess());
+    expect(registry.linkByPid("S1", 999)).toBe(false);
+  });
+
+  it("linkByPid does not relink already-linked entry", () => {
+    const registry = createHeadlessPidRegistry({ pidFilePath: join(makeTempDir(), "pids.json") });
+    registry.register(123, "/p", mockProcess());
+    expect(registry.linkByPid("S1", 123)).toBe(true);
+    expect(registry.linkByPid("S2", 123)).toBe(false);
+  });
+
+  it("closes the kill-fork-kills-parent race: distinct tokens for two same-cwd spawns", () => {
+    // Setup: parent S1 already linked. Concurrent fork is registered.
+    // Without token-link, cwd-FIFO would assign the fork's sessionId to
+    // parent's pid. With token-link, identity is exact.
+    const registry = createHeadlessPidRegistry({ pidFilePath: join(makeTempDir(), "pids.json") });
+    registry.register(1000, "/proj", mockProcess(), "tok_parent");
+    registry.register(1234, "/proj", mockProcess(), "tok_fork");
+
+    // Bridge connect order is reversed (fork's bridge connects first):
+    expect(registry.linkByToken("tok_fork", "S_fork")).toBe(true);
+    expect(registry.linkByToken("tok_parent", "S_parent")).toBe(true);
+
+    // Each session resolves to its OWN pid — no swap.
+    expect(registry.getPid("S_fork")).toBe(1234);
+    expect(registry.getPid("S_parent")).toBe(1000);
+  });
+
+  it("linkByPid fixes the kill-fork-kills-parent race even without tokens (legacy bridge)", () => {
+    const registry = createHeadlessPidRegistry({ pidFilePath: join(makeTempDir(), "pids.json") });
+    registry.register(1000, "/proj", mockProcess()); // no token (legacy)
+    registry.register(1234, "/proj", mockProcess()); // no token (legacy)
+
+    // Bridge supplies pid in session_register — link by pid is exact.
+    expect(registry.linkByPid("S_fork", 1234)).toBe(true);
+    expect(registry.linkByPid("S_parent", 1000)).toBe(true);
+
+    expect(registry.getPid("S_fork")).toBe(1234);
+    expect(registry.getPid("S_parent")).toBe(1000);
+  });
+});

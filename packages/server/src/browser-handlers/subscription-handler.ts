@@ -137,6 +137,8 @@ export function handleSubscribe(
   // while the browser is actually subscribed (responses use sendToSubscribers).
   piGateway.sendToSession(msg.sessionId, { type: "request_commands", sessionId: msg.sessionId });
   piGateway.sendToSession(msg.sessionId, { type: "request_models", sessionId: msg.sessionId });
+  // See change: replace-hardcoded-provider-lists.
+  piGateway.sendToSession(msg.sessionId, { type: "request_providers", sessionId: msg.sessionId });
   piGateway.sendToSession(msg.sessionId, { type: "request_roles", sessionId: msg.sessionId });
 
   if (eventStore.hasEvents(msg.sessionId)) {
@@ -170,8 +172,14 @@ export function handleSubscribe(
       // empty; assets already known to the client are simply re-overwritten
       // with identical bytes. See change: chat-markdown-local-images-and-math.
       replaySessionAssets(ws, msg.sessionId, ctx);
-      // Suppress live events during delta replay to prevent out-of-order delivery
-      if (lastSeq > 0 && events.length > 0) {
+      // Suppress live events during paginated replay to prevent out-of-order
+      // delivery. The client's `event_replay` reset rule (firstSeq <= maxSeq)
+      // misfires if a live `event` arrives between batches and bumps maxSeq
+      // past the next batch's firstSeq — wiping state to a fresh build of
+      // only the last batch. Suppression+catch-up via clearReplaying preserves
+      // ordering for both cold (lastSeq=0) and warm (lastSeq>0) subscribes.
+      // See change: fix-cold-subscribe-replay-interleave.
+      if (events.length > 0) {
         markReplaying(ws, msg.sessionId);
         sendEventBatches(ws, msg.sessionId, events, sendTo).then((lastSent) => {
           clearReplaying(ws, msg.sessionId, lastSent);

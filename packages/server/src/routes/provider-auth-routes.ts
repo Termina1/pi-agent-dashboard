@@ -18,6 +18,7 @@ import {
   resolveAuthJsonKey,
   type ApiKeyCredential,
 } from "../provider-auth-storage.js";
+import { getLatestCatalogue } from "../provider-catalogue-cache.js";
 import { startCallbackServer } from "../oauth-callback-server.js";
 import type { PiGateway } from "../pi-gateway.js";
 import type { BrowserGateway } from "../browser-gateway.js";
@@ -87,8 +88,12 @@ export function registerProviderAuthRoutes(
   const { piGateway, browserGateway } = deps;
 
   function notifyBridges() {
+    // Tell every bridge to reload auth.json + refresh its model registry.
+    // Each bridge will then push a fresh per-session models_list (and
+    // providers_list); browsers pick those up via the existing per-session
+    // broadcast and update modelsMap / catalogue cache without needing a
+    // global wipe. See change: simplify-model-selection-channels.
     piGateway.broadcast({ type: "credentials_updated" });
-    browserGateway.broadcastToAll({ type: "models_refreshed" });
   }
 
   // List OAuth providers
@@ -98,6 +103,14 @@ export function registerProviderAuthRoutes(
 
   // Full status (OAuth + API key)
   fastify.get("/api/provider-auth/status", async () => {
+    // Cold-cache nudge: if no bridge has pushed a catalogue yet, ask
+    // every connected pi to send one. Best-effort, doesn't block this
+    // response. See change: replace-hardcoded-provider-lists.
+    if (getLatestCatalogue().length === 0) {
+      for (const sid of piGateway.getConnectedSessionIds()) {
+        piGateway.sendToSession(sid, { type: "request_providers", sessionId: sid });
+      }
+    }
     return getAuthStatus();
   });
 

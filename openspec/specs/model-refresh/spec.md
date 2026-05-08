@@ -1,43 +1,54 @@
 # model-refresh Specification
 
 ## Purpose
-TBD - created by archiving change fix-model-selector-after-provider-auth. Update Purpose after archive.
-## Requirements
-### Requirement: Server notifies browsers after provider credential changes
+Defines how the dashboard's per-session model selector dropdown stays in sync with each pi process's `ModelRegistry` after credential or provider changes. The contract is "self-healing per-session updates" — every bridge pushes a fresh `models_list` for its own session whenever its registry changes (initial connect, `credentials_updated`, `onProvidersChanged`), and browsers update `modelsMap[sessionId]` incrementally. There is no global wipe and no cross-session broadcast — this prevents previously-visited sessions from losing their dropdown contents when an unrelated session's bridge re-pushes its catalogue.
 
-The server SHALL broadcast a `models_refreshed` message to all connected browser clients whenever a provider credential is written or removed.
+## Requirements
+
+### Requirement: Per-session models_list is the dropdown's source of truth
+
+The bridge SHALL push a `models_list` message for its own `sessionId` whenever its `ModelRegistry.getAvailable()` may have changed: at session_start, after handling `credentials_updated`, on `onProvidersChanged` callback (custom-provider discovery completion), and in response to `request_models`. The server SHALL forward each push verbatim to every connected browser via `broadcastToAll`. Browsers SHALL replace `modelsMap[sessionId]` with the received models without disturbing other sessions' entries.
 
 #### Scenario: OAuth provider authenticated
-- **WHEN** a user completes OAuth authentication for a provider (e.g., Anthropic)
-- **THEN** the server broadcasts `models_refreshed` to all connected browser WebSocket clients
+- **WHEN** a user completes OAuth authentication for a provider (e.g. Anthropic)
+- **THEN** the server broadcasts `credentials_updated` to every bridge
+- **AND** each bridge re-reads `auth.json`, refreshes its `ModelRegistry`, and pushes a fresh `models_list` for its own `sessionId`
+- **AND** each browser receives those `models_list` messages and updates `modelsMap[sessionId]` incrementally
+- **AND** no other session's `modelsMap` entry is wiped
 
 #### Scenario: API key saved
-- **WHEN** a user saves an API key for a provider
-- **THEN** the server broadcasts `models_refreshed` to all connected browser WebSocket clients
+- **WHEN** a user saves an API key via `PUT /api/provider-auth/api-key`
+- **THEN** the server writes `auth.json` and broadcasts `credentials_updated` to every bridge
+- **AND** the bridge cycle as above runs for every session
+- **AND** the dropdown for every active session reflects the new credential within one bridge round-trip
 
 #### Scenario: Credential removed
-- **WHEN** a user removes a provider credential
-- **THEN** the server broadcasts `models_refreshed` to all connected browser WebSocket clients
+- **WHEN** a user removes a provider credential via `DELETE /api/provider-auth/:provider`
+- **THEN** the server emits `credentials_updated` and the bridge cycle delivers fresh per-session `models_list` updates
+- **AND** the dropdown reflects the removal without any global wipe
 
-### Requirement: Client refreshes model lists on models_refreshed
+#### Scenario: Custom provider added via Settings → LLM Providers
+- **WHEN** a user saves a custom provider entry in `~/.pi/agent/providers.json` via `PUT /api/providers`
+- **THEN** the server emits `credentials_updated` to every bridge
+- **AND** each bridge runs `reloadProviders` (registers the new provider via `pi.registerProvider(...)`, including async `discoverModels` for its `/v1/models` endpoint)
+- **AND** each bridge pushes `models_list` containing the new provider's models for its own `sessionId`
+- **AND** every browser's dropdown for every active session updates with the new entries
 
-The client SHALL clear its cached model lists and re-request models for the currently selected session when it receives a `models_refreshed` message.
+#### Scenario: New session spawn does NOT wipe other sessions' models
+- **WHEN** a user spawns a new session and the new pi process's bridge sends its first `providers_list` and `models_list`
+- **THEN** the server SHALL NOT broadcast any signal that wipes `modelsMap` globally
+- **AND** previously-visited sessions in the browser's `subscribedRef` keep their `modelsMap` entries intact
+- **AND** the new session's `models_list` populates `modelsMap[<newSessionId>]` only
 
-#### Scenario: models_refreshed received with active session selected
+### Requirement: models_refreshed is a no-op on the client
+
+The browser-protocol message `models_refreshed` SHALL be accepted by the client without any state mutation — neither wiping `modelsMap`, sending `request_models`, nor any other side effect. The case is retained as a defensive no-op so older bridge builds that may still emit it do not cause runtime errors under strict-union message handling.
+
+#### Scenario: Client receives models_refreshed
 - **WHEN** the browser receives a `models_refreshed` message
-- **AND** a session is currently selected
-- **THEN** the client clears all cached model lists from `modelsMap`
-- **AND** immediately sends `request_models` for the selected session
-
-#### Scenario: models_refreshed received with no session selected
-- **WHEN** the browser receives a `models_refreshed` message
-- **AND** no session is currently selected
-- **THEN** the client clears all cached model lists from `modelsMap`
-
-#### Scenario: Selecting a different session after models_refreshed
-- **WHEN** the client has cleared `modelsMap` due to `models_refreshed`
-- **AND** the user selects a session that has no cached models
-- **THEN** the client sends `request_models` for that session
+- **THEN** the client SHALL NOT modify `modelsMap`
+- **AND** the client SHALL NOT send `request_models`
+- **AND** the client SHALL NOT make any HTTP request
 
 ### Requirement: Bridge logs credential reload errors
 
@@ -52,4 +63,3 @@ The bridge SHALL log errors that occur during the `credentials_updated` handler 
 - **WHEN** the bridge receives `credentials_updated`
 - **AND** `getAvailable()` throws an error
 - **THEN** the error is logged via `console.error` with a `[dashboard]` prefix
-

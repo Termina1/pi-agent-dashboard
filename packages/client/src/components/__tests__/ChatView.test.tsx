@@ -383,4 +383,116 @@ describe("ChatView", () => {
       expect(onDismiss).toHaveBeenCalledOnce();
     });
   });
+
+  // See change: render-skill-invocations-collapsibly.
+  describe("skill-invocation routing", () => {
+    it("routes user messages with skill metadata to SkillInvocationCard", () => {
+      const state = createInitialState();
+      const wrapped = `<skill name="openspec-explore" location="/x/SKILL.md">\nbody\n</skill>\n\nfollow up`;
+      state.messages.push({
+        id: "u-skill",
+        role: "user",
+        content: wrapped,
+        timestamp: 1,
+        skill: {
+          name: "openspec-explore",
+          location: "/x/SKILL.md",
+          body: "body",
+          args: "follow up",
+          condensed: "/skill:openspec-explore follow up",
+        },
+      } as ChatMessage);
+      state.messages.push({
+        id: "u-plain",
+        role: "user",
+        content: "plain prompt",
+        timestamp: 2,
+      } as ChatMessage);
+      const { container } = render(
+        <ThemeProvider>
+          <ChatView state={state} toolContext={defaultToolContext} />
+        </ThemeProvider>,
+      );
+      // The skill card uses aria-expanded for its toggle button. The plain bubble does not.
+      const expandToggles = container.querySelectorAll("button[aria-expanded]");
+      expect(expandToggles.length).toBe(1);
+      // The condensed slash form appears in the document
+      expect(container.textContent).toContain("/skill:openspec-explore follow up");
+      // The plain prompt also renders
+      expect(container.textContent).toContain("plain prompt");
+    });
+
+    it("plain user messages without skill stamp render as the regular bubble", () => {
+      const state = stateWithMessages([
+        { id: "u", role: "user", content: "hello" },
+      ]);
+      const { container } = render(
+        <ThemeProvider>
+          <ChatView state={state} toolContext={defaultToolContext} />
+        </ThemeProvider>,
+      );
+      // No card-style toggle button
+      expect(container.querySelectorAll("button[aria-expanded]").length).toBe(0);
+      // Standard MessageBubble copy buttons present
+      expect(container.querySelector('button[title="Copy as Markdown"]')).not.toBeNull();
+    });
+  });
+
+  describe("retry banner integration (provider-retry-state)", () => {
+    it("does not render retry banner when retryState is undefined", () => {
+      const state = createInitialState();
+      const { container } = render(
+        <ThemeProvider>
+          <ChatView state={state} toolContext={defaultToolContext} />
+        </ThemeProvider>,
+      );
+      expect(container.querySelector('[data-testid="retry-banner"]')).toBeNull();
+    });
+
+    it("renders retry banner when retryState is set with delayMs >= 500", () => {
+      const state = {
+        ...createInitialState(),
+        retryState: { attempt: 1, maxAttempts: 3, delayMs: 2000, reason: "rate limit", startedAt: 0 },
+      };
+      const { container } = render(
+        <ThemeProvider>
+          <ChatView state={state} toolContext={defaultToolContext} />
+        </ThemeProvider>,
+      );
+      expect(container.querySelector('[data-testid="retry-banner"]')).not.toBeNull();
+    });
+
+    it("renders retry banner with indeterminate state when delayMs is sentinel -1", () => {
+      const state = {
+        ...createInitialState(),
+        retryState: { attempt: 1, maxAttempts: -1, delayMs: -1, reason: "x", startedAt: 0 },
+      };
+      const { container } = render(
+        <ThemeProvider>
+          <ChatView state={state} toolContext={defaultToolContext} />
+        </ThemeProvider>,
+      );
+      expect(container.querySelector('[data-testid="retry-banner"]')).not.toBeNull();
+      expect(container.querySelector('[data-testid="retry-banner-indeterminate"]')).not.toBeNull();
+    });
+
+    it("retry banner and error banner can coexist (retry above error)", () => {
+      const state = {
+        ...createInitialState(),
+        retryState: { attempt: 2, maxAttempts: 3, delayMs: 4000, reason: "x", startedAt: 0 },
+        lastError: { message: "boom", timestamp: 0 },
+      };
+      const { container } = render(
+        <ThemeProvider>
+          <ChatView state={state} toolContext={defaultToolContext} />
+        </ThemeProvider>,
+      );
+      const retry = container.querySelector('[data-testid="retry-banner"]');
+      const error = container.querySelector('[data-testid="error-banner"]');
+      expect(retry).not.toBeNull();
+      expect(error).not.toBeNull();
+      // Retry must appear before error in document order (compareDocumentPosition: 4 = following)
+      expect(retry!.compareDocumentPosition(error!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+  });
 });

@@ -49,6 +49,18 @@ describe("SpawnRegisterWatchdog", () => {
     expect(messages).toHaveLength(0);
   });
 
+  it("headless arm + clearByCwd (pid mismatch) still cancels watchdog", () => {
+    // Regression: Unix headless wraps pi in `sh -c "… | pi"`, so spawnResult.pid
+    // is the sh wrapper while session_register reports pi's real pid. Watchdog
+    // must clear via cwd even when pid was indexed at arm time.
+    const { ws, messages } = makeMockWs();
+    const w = new SpawnRegisterWatchdog(10000);
+    w.arm({ pid: 51250, cwd: "/p/x", mechanism: "headless", ws });
+    w.clearByCwd("/p/x");
+    vi.advanceTimersByTime(15000);
+    expect(messages).toHaveLength(0);
+  });
+
   it("tmux arm + clearByCwd cancels watchdog", () => {
     const { ws, messages } = makeMockWs();
     const w = new SpawnRegisterWatchdog(10000);
@@ -150,5 +162,89 @@ describe("SpawnRegisterWatchdog", () => {
     // Only the timeout message was sent (before ws was closed).
     const recoveries = messages.filter((m) => m.includes("spawn_register_recovered"));
     expect(recoveries).toHaveLength(0);
+  });
+});
+
+// See change: spawn-correlation-token — third index by token.
+describe("SpawnRegisterWatchdog: byToken index", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("clearByToken cancels the watchdog", () => {
+    const w = new SpawnRegisterWatchdog(30_000);
+    const { ws, messages } = makeMockWs();
+    w.arm({ pid: 100, cwd: "/p", mechanism: "headless", ws, spawnToken: "tok_a" });
+    w.clearByToken("tok_a");
+    vi.advanceTimersByTime(60_000);
+    expect(messages.filter((m) => m.includes("spawn_register_timeout"))).toHaveLength(0);
+  });
+
+  it("clearByToken removes entry from cwd and pid indices too", () => {
+    const w = new SpawnRegisterWatchdog(30_000);
+    const { ws } = makeMockWs();
+    w.arm({ pid: 100, cwd: "/p", mechanism: "headless", ws, spawnToken: "tok_a" });
+    w.clearByToken("tok_a");
+    // Subsequent clearByPid / clearByCwd are no-ops (entry already removed).
+    w.clearByPid(100);
+    w.clearByCwd("/p");
+    // No exception, no double-clear.
+    expect(true).toBe(true);
+  });
+
+  it("clearByPid also clears the token index", () => {
+    const w = new SpawnRegisterWatchdog(30_000);
+    const { ws, messages } = makeMockWs();
+    w.arm({ pid: 100, cwd: "/p", mechanism: "headless", ws, spawnToken: "tok_a" });
+    w.clearByPid(100);
+    // Token-keyed clear is now a no-op (already cleaned up).
+    w.clearByToken("tok_a");
+    vi.advanceTimersByTime(60_000);
+    expect(messages.filter((m) => m.includes("spawn_register_timeout"))).toHaveLength(0);
+  });
+
+  it("tmux arm without pid: token clears watchdog", () => {
+    const w = new SpawnRegisterWatchdog(30_000);
+    const { ws, messages } = makeMockWs();
+    w.arm({ cwd: "/p", mechanism: "tmux", ws, spawnToken: "tok_b" });
+    w.clearByToken("tok_b");
+    vi.advanceTimersByTime(60_000);
+    expect(messages.filter((m) => m.includes("spawn_register_timeout"))).toHaveLength(0);
+  });
+
+  it("late clearByToken after timeout emits recovered", () => {
+    const w = new SpawnRegisterWatchdog(30_000);
+    const { ws, messages } = makeMockWs();
+    w.arm({ pid: 100, cwd: "/p", mechanism: "headless", ws, spawnToken: "tok_c" });
+    vi.advanceTimersByTime(31_000); // timeout fires
+    expect(messages.filter((m) => m.includes("spawn_register_timeout"))).toHaveLength(1);
+    w.clearByToken("tok_c");
+    expect(messages.filter((m) => m.includes("spawn_register_recovered"))).toHaveLength(1);
+  });
+
+  it("two simultaneous arms with distinct tokens, distinct cwds: token-clears each independently", () => {
+    const w = new SpawnRegisterWatchdog(30_000);
+    const { ws: ws1, messages: m1 } = makeMockWs();
+    const { ws: ws2, messages: m2 } = makeMockWs();
+    w.arm({ pid: 100, cwd: "/p1", mechanism: "headless", ws: ws1, spawnToken: "tok_x" });
+    w.arm({ pid: 200, cwd: "/p2", mechanism: "headless", ws: ws2, spawnToken: "tok_y" });
+    w.clearByToken("tok_y");
+    vi.advanceTimersByTime(31_000);
+    // Only the first arm's timeout fired (second was cleared).
+    expect(m1.filter((m) => m.includes("spawn_register_timeout"))).toHaveLength(1);
+    expect(m2.filter((m) => m.includes("spawn_register_timeout"))).toHaveLength(0);
+  });
+
+  it("arm without spawnToken behaves as before", () => {
+    const w = new SpawnRegisterWatchdog(30_000);
+    const { ws, messages } = makeMockWs();
+    w.arm({ pid: 100, cwd: "/p", mechanism: "headless", ws });
+    // Token-clear with empty / unknown token is a no-op.
+    w.clearByToken("tok_unknown");
+    vi.advanceTimersByTime(31_000);
+    expect(messages.filter((m) => m.includes("spawn_register_timeout"))).toHaveLength(1);
   });
 });

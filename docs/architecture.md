@@ -797,7 +797,18 @@ Package operations use pi's `DefaultPackageManager` API on the server, serialize
 
 Why a separate system? Pi's `DefaultPackageManager` only manages packages listed in `settings.json packages[]` (extensions/skills/prompts/themes). The pi CLI binary itself and the dashboard server package are installed directly via `npm -g` (or into `~/.pi-dashboard/` in the Electron case) and are invisible to pi's manager. `PiCoreChecker` + `PiCoreUpdater` (`pi-core-checker.ts` + `pi-core-updater.ts`) fill that gap.
 
-Progress for core updates is delivered via typed `pi_core_update_progress` / `pi_core_update_complete` browser-protocol messages (not the `package_progress` channel) and fanned out to `PiCoreVersionsSection` and `PiUpdateBadge` via a `pi-core-event` DOM event. After any successful core update the server sends `/reload` to connected pi sessions just like extension updates.
+Core update progress delivered via typed `pi_core_update_progress` / `pi_core_update_complete` browser-protocol messages (not `package_progress` channel). Fanned out to `UnifiedPackagesSection` + `PiUpdateBadge` via `pi-core-event` DOM event. Successful core update triggers `/reload` to connected pi sessions, same as extension updates.
+
+### Settings → Packages tab
+
+- Settings tab renders single `<UnifiedPackagesSection>`.
+- Three sub-groups in priority order: Core → Recommended → Other.
+- **Core**: strict whitelist from `pi-core-checker.ts#CORE_PACKAGE_NAMES`. Update via `/api/pi-core/update`. No Uninstall.
+- **Recommended Extensions**: rows where `isRecommended` true on `/api/packages/installed` response (server-side cross-reference against `RECOMMENDED_EXTENSIONS` manifest).
+- **Other Packages**: every remaining installed row.
+- Each package classified into exactly one group. Core wins over Recommended wins over Other (dedupe).
+- All three groups render with shared `<PackageRow>` — same visual language, same affordances modulo sub-group rules.
+- See change: consolidate-packages-settings-ui.
 
 **Header badge**: `PiUpdateBadge` polls `/api/pi-core/versions` on mount + every 30 min. When `updatesAvailable > 0` it renders a small pill-shaped button next to the `ServerSelector` that navigates to `/settings?tab=packages`.
 
@@ -1798,7 +1809,25 @@ See change: `eliminate-bash-on-windows-runners`.
 
 ### Power-user-mode managed install (Defect 1 fix)
 
-The Electron app's first-launch flow has three branches:
+### LaunchSource V2 Resolution (Phase C default)
+
+`selectLaunchSource()` in `packages/electron/src/lib/launch-source.ts` replaces the legacy `mode.json` + `isFirstRun` branching. Resolver walks five probe-based sources in priority order:
+
+1. `attach` — health probe returns 200 within 3s on the configured port.
+2. `devMonorepo` — `!app.isPackaged AND existsSync(cwd/packages/server/src/cli.ts)`.
+3. `piExtension` — `~/.pi/agent/settings.json` has a bridge extension with resolvable server package >= `bundledMinVersion`.
+4. `npmGlobal` — `which pi-dashboard` returns a real-path not under `process.resourcesPath`, version >= `bundledMinVersion`.
+5. `extracted` — always succeeds (fallback). May trigger bundle extraction from `process.resourcesPath` when version marker mismatches.
+
+All probes are injectable (tests inject fakes). Override via `DASHBOARD_PREFER_SOURCE=<kind>` env var.
+
+The spawned server receives `DASHBOARD_STARTER=Electron`. Lifecycle ownership rule: Electron calls `/api/shutdown` on quit ONLY when `health.starter === "Electron" AND health.pid === storedSpawnedPid`.
+
+The `LAUNCH_SOURCE_V2=false` escape hatch reverts to the legacy `mode.json` path (documented below). The flag and its legacy path will be removed in a follow-up change.
+
+### Legacy first-launch flow (LAUNCH_SOURCE_V2=false)
+
+The Electron app's first-launch flow has three branches (escape-hatch only):
 
 ```
   firstRun?
@@ -2022,3 +2051,33 @@ row also honors the flag — when set, the row shows an amber "skipped" pill
 instead of a red blocker and Continue is enabled.
 
 See change: require-git-on-boot.
+
+## Doctor Diagnostics
+
+Single rich-output diagnostic surface. Three consumers wrap one shared core.
+
+```
+Electron lib (packages/electron/src/lib/doctor.ts)
+        ↕
+Shared core (packages/shared/src/doctor-core.ts)  ← runSharedChecks(deps)
+        ↕
+Server route (packages/server/src/routes/doctor-routes.ts)  GET /api/doctor
+        ↕
+Web client (packages/client/src/components/DiagnosticsSection.tsx)
+```
+
+`doctor-core.ts` exports types (`DoctorCheck`, `DoctorReport`, `DoctorSection`, `ExecFailureKind`), the `SECTION_OF` + `SUGGESTIONS` lookup maps, helper primitives, and `runSharedChecks(deps)` (portable rows: pi binary + version, openspec binary + version, tsx binary, Node runtime compatibility, managed-dir layout, server health). Each consumer post-stamps section + suggestion via the shared maps so labels stay consistent across surfaces.
+
+- **Electron**: `lib/doctor.ts` runs `runSharedChecks` plus Electron-only rows (Electron version, bundled Node, bundled npm, server-code path, offline-packages bundle, server-launch sanity test). `lib/doctor-window.ts` opens a `BrowserWindow` (1000×720, single-instance focus-reuse) that loads `renderer/doctor.html` through `preload/doctor-preload.ts`. IPC channels (`doctor:run`, `doctor:open-log`, `doctor:open-doctor-log`, `doctor:run-setup`, `doctor:copy`, `doctor:open-managed-dir`) defined as a frozen `DOCTOR_IPC_CHANNELS` map in `lib/doctor-bridge-contract.ts` so preload + renderer share one symbol — channel-name drift fails type-check.
+- **Server**: `routes/doctor-routes.ts` exposes `GET /api/doctor` returning `{checks, summary, generatedAt}`. Auth-gated identically to `/api/config`. Top-level `try/catch` returns 200 with a fallback row on internal throw — never 500. Omits Electron-only rows.
+- **Web client**: `lib/doctor-api.ts` exports `fetchDoctorReport()` returning a typed envelope (`DoctorFetchError` on non-200 / shape mismatch). `components/DiagnosticsSection.tsx` renders sections in fixed order, omits empty sections, shows status pill + message + truncated path + `<MarkdownContent>` suggestion. Toolbar Re-run + Copy as Markdown / Plain (textarea-modal fallback when `navigator.clipboard.writeText` rejects, e.g. non-secure-context).
+
+### Fault-tolerance contract
+
+Diagnostics MUST never crash the app. `doctor-core.ts` enforces this with three primitives:
+
+- **`safeCheck(name, section, fn)`** — per-check fault isolation. Wraps each individual check; swallows synchronous + async throws and returns an `error`-status row pinned to the named section. One broken check never blanks the report.
+- **`safeExec(cmd, opts)`** — bounded `execSync` wrapper. Classifies failure into `ExecFailureKind` (`not-found` | `permission-denied` | `timeout` | `non-zero-exit` | `unknown`) so callers render targeted suggestions instead of leaking raw stderr. `timeoutMs` defaults to a sane value; cold-start probes (e.g. server launch sanity) override to 15000.
+- **`assumedMandatory(label, fn, deps)`** — wraps "should-never-fail" ops (e.g. reading bundled-Node version, listing `~/.pi-dashboard/`). On throw it appends a structured entry to `<managedDir>/doctor.log` (1MB ring rotation) AND surfaces a row in the `Diagnostics` section so the user sees something went wrong instead of a silent gap. The log is opened from the toolbar (`Open doctor log`); the IPC handler returns `{exists:false}` when the file is absent so the renderer can show "no entries yet" instead of erroring.
+
+See change: `doctor-rich-output`.

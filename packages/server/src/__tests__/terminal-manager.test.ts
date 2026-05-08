@@ -242,6 +242,51 @@ describe("TerminalManager", () => {
       handlers.message(resizeMsg, false);
       expect(mockPtyResize).toHaveBeenCalledWith(120, 40);
     });
+
+    // Resize floor — see change: fix-terminal-half-height-dual-mount.
+    // PTYs at <2 cols/rows are non-functional for every supported shell
+    // and the most common cause is a transient display:none container
+    // measured by FitAddon during a route transition.
+    describe("resize floor", () => {
+      function attachAndSendResize(cols: number, rows: number) {
+        const session = manager.spawn("/tmp");
+        const handlers: Record<string, Function> = {};
+        const mockWs = {
+          send: vi.fn(),
+          on: vi.fn((event: string, cb: any) => { handlers[event] = cb; }),
+          readyState: 1,
+          OPEN: 1,
+        } as any;
+        manager.attach(session.id, mockWs);
+        const msg = Buffer.from(JSON.stringify({ type: "resize", cols, rows }));
+        handlers.message(msg, false);
+      }
+
+      it("ignores resize with cols below floor (cols=1)", () => {
+        attachAndSendResize(1, 24);
+        expect(mockPtyResize).not.toHaveBeenCalled();
+      });
+
+      it("ignores resize with rows below floor (rows=0)", () => {
+        attachAndSendResize(80, 0);
+        expect(mockPtyResize).not.toHaveBeenCalled();
+      });
+
+      it("ignores resize with both dimensions below floor", () => {
+        attachAndSendResize(1, 1);
+        expect(mockPtyResize).not.toHaveBeenCalled();
+      });
+
+      it("accepts resize at the floor (cols=2, rows=2)", () => {
+        attachAndSendResize(2, 2);
+        expect(mockPtyResize).toHaveBeenCalledWith(2, 2);
+      });
+
+      it("accepts a normal resize", () => {
+        attachAndSendResize(80, 24);
+        expect(mockPtyResize).toHaveBeenCalledWith(80, 24);
+      });
+    });
   });
 
   describe("PTY exit", () => {

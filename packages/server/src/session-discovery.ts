@@ -6,6 +6,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
+import { condenseForFirstMessage } from "@blackbelt-technology/pi-dashboard-shared/skill-block-parser.js";
 
 export interface DiscoveredSession {
   id: string;
@@ -53,15 +54,21 @@ function readSessionHeader(filePath: string): {
         if (entry.type === "session_info" && entry.name) {
           name = entry.name;
         }
-        // Find first user message
+        // Find first user message. Skill invocations are stored as a
+        // `<skill name=...>...</skill>\n\nargs` envelope (~264 chars for typical
+        // absolute paths) which is longer than the 200-char firstMessage budget,
+        // so a naive .slice(0, 200) cuts the wrapper in half. condenseForFirstMessage
+        // returns the condensed slash form (`/skill:name args`) when the input
+        // matches the envelope, falling back to the raw slice otherwise.
+        // See change: render-skill-invocations-collapsibly.
         if (!firstMessage && entry.type === "message" && entry.message?.role === "user") {
           const msg = entry.message;
           if (typeof msg.content === "string") {
-            firstMessage = msg.content.slice(0, 200);
+            firstMessage = condenseForFirstMessage(msg.content, 200);
           } else if (Array.isArray(msg.content)) {
             for (const part of msg.content) {
               if (part.type === "text" && part.text) {
-                firstMessage = part.text.slice(0, 200);
+                firstMessage = condenseForFirstMessage(part.text, 200);
                 break;
               }
             }

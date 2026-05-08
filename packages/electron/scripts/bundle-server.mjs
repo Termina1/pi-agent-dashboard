@@ -23,8 +23,11 @@ import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
+  readlinkSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -113,6 +116,48 @@ writeFileSync(
 );
 
 // ── source-only short-circuit ────────────────────────────────────────────
+// Strip dev-only files early — must run BEFORE the source-only
+// short-circuit so Docker cross-builds also benefit. Two reasons:
+//   1. These files don't belong in the production runtime bundle.
+//   2. macOS xattrs (`@` flag) on these files confuse Docker Desktop's
+//      filesystem virtualization, producing EACCES during electron-
+//      forge's asar pack step.
+for (const pkg of ["server", "shared", "extension"]) {
+  // Top-level test / lint / config files
+  for (const cfg of [
+    "vitest.config.ts",
+    "vitest.config.js",
+    "vite.config.ts",
+    "vite.config.js",
+    ".eslintrc.cjs",
+    ".eslintrc.json",
+    "eslint.config.js",
+    "eslint.config.mjs",
+    "tsconfig.tsbuildinfo",
+  ]) {
+    rmSync(path.join(SERVER_BUNDLE, "packages", pkg, cfg), { force: true });
+  }
+  rmSync(path.join(SERVER_BUNDLE, "packages", pkg, "src", "__tests__"), {
+    recursive: true,
+    force: true,
+  });
+}
+// Recursively strip TypeScript incremental build cache anywhere in the bundle.
+walkPaths(SERVER_BUNDLE, (p, name) => {
+  if (name === "tsconfig.tsbuildinfo" || name.endsWith(".tsbuildinfo")) {
+    try { rmSync(p, { force: true }); } catch {}
+  }
+});
+// On macOS hosts, recursively strip extended attributes from the entire
+// bundle. Without this, Docker Desktop's filesystem layer can mis-translate
+// the `com.apple.quarantine` xattr into broken Linux perms inside the
+// container, surfacing as random EACCES on otherwise-valid files.
+if (process.platform === "darwin") {
+  try {
+    spawnSync("xattr", ["-cr", SERVER_BUNDLE], { stdio: "ignore" });
+  } catch { /* xattr is macOS-only and best-effort */ }
+}
+
 if (SOURCE_ONLY) {
   console.log("  Source-only mode — skipping npm install (run on target platform)");
   const sizeH = humanBytes(dirSizeBytes(SERVER_BUNDLE));
@@ -155,6 +200,8 @@ const tail = npmOut.trim().split(/\r?\n/).slice(-5).join("\n");
 if (tail) console.log(tail);
 
 // ── strip __tests__ from workspace source ────────────────────────────────
+// Test config + __tests__ already stripped above (before source-only exit).
+// This block kept for full-mode runs that need the same cleanup post-install.
 for (const pkg of ["server", "shared", "extension"]) {
   rmSync(path.join(SERVER_BUNDLE, "packages", pkg, "src", "__tests__"), {
     recursive: true,
@@ -176,6 +223,52 @@ if (existsSync(NM)) {
       n.endsWith(".d.ts"),
     dirMatch: (n) => n === "__tests__" || n === "test",
   });
+}
+
+// ── materialize workspace symlinks under @blackbelt-technology/* ─────────
+// npm workspaces creates symlinks like
+//   node_modules/@blackbelt-technology/pi-dashboard-server -> ../../packages/server
+// which are valid inside the bundle. BUT Node's `fs.cpSync(..., { recursive:
+// true, dereference: false })` — used by Electron's `extractBundle` on first
+// launch — has a quirk: it rewrites RELATIVE symlinks as ABSOLUTE paths
+// pointing to the build host's source location. After extraction on a user's
+// machine, those absolute paths resolve to nothing, breaking cliPath and
+// everything pi-coding-agent depends on.
+//
+// docker-make.sh already does this replacement for Docker (Linux/Windows)
+// builds. Replicate here so native-macOS builds (which run bundle-server.mjs
+// directly via build-installer.sh, no docker-make.sh) also ship a
+// symlink-free bundle. The smoke test
+// `packages/electron/src/lib/__tests__/launch-source.smoke.test.ts` Tier A
+// pins this invariant.
+const BB_DIR = path.join(SERVER_BUNDLE, "node_modules", "@blackbelt-technology");
+if (existsSync(BB_DIR)) {
+  let materialized = 0;
+  for (const name of readdirSync(BB_DIR)) {
+    const linkPath = path.join(BB_DIR, name);
+    let st;
+    try { st = lstatSync(linkPath); } catch { continue; }
+    if (!st.isSymbolicLink()) continue;
+    let target;
+    try { target = readlinkSync(linkPath); } catch { continue; }
+    const absTarget = path.isAbsolute(target)
+      ? target
+      : path.resolve(path.dirname(linkPath), target);
+    if (!existsSync(absTarget)) {
+      console.log(`  ⚠ Symlink target missing, leaving as-is: ${name} → ${target}`);
+      continue;
+    }
+    // Replace symlink with copy via tmp + rename for atomicity.
+    const tmpPath = linkPath + ".materializing";
+    rmSync(tmpPath, { recursive: true, force: true });
+    cpSync(absTarget, tmpPath, { recursive: true, dereference: true });
+    rmSync(linkPath, { force: true });
+    renameSync(tmpPath, linkPath);
+    materialized += 1;
+  }
+  if (materialized > 0) {
+    console.log(`  Materialized ${materialized} workspace symlink(s) under @blackbelt-technology/`);
+  }
 }
 
 // ── fix spawn-helper +x on POSIX (npm hoisting may skip postinstall) ─────

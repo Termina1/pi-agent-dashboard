@@ -255,6 +255,10 @@ export interface ProviderAuthStatus {
   authenticated: boolean;
   expires?: number;
   maskedKey?: string;
+  /** Name of the env var pi-ai consults for this provider (api-key rows only). */
+  envVar?: string;
+  /** True when configured via ambient credential chain (AWS profile / GCP ADC). */
+  ambient?: boolean;
 }
 
 export interface AuthorizeResponse {

@@ -185,7 +185,18 @@ export function createTerminalManager(options?: TerminalManagerOptions): Termina
         try {
           const msg: TerminalControlMessage = JSON.parse(str);
           if (msg.type === "resize") {
-            entry.pty.resize(msg.cols, msg.rows);
+            // Defense in depth: reject degenerate resize messages.
+            // A PTY at <2 cols/rows is non-functional for every supported
+            // shell binding; no legitimate user intent maps there. xterm's
+            // FitAddon is supposed to guard against zero, but a transient
+            // display:none container measured during a route transition
+            // can leak a 1 through. See change:
+            // fix-terminal-half-height-dual-mount.
+            if (msg.cols < 2 || msg.rows < 2) {
+              // ignore — keep previous PTY dimensions
+            } else {
+              entry.pty.resize(msg.cols, msg.rows);
+            }
           } else if (msg.type === "title") {
             // title control message — handled elsewhere
           } else {

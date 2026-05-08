@@ -367,6 +367,80 @@ describe("reloadProviders", () => {
     expect(opus.input).toEqual(["text", "image"]);
   });
 
+  // ── custom-flag race regression (see change: fix-custom-provider-flag-race) ──
+  // The bridge's first `providers_list` push fires from `session_start`
+  // shortly after `activate()` kicked off async `registerEntry()` calls.
+  // The catalogue's `custom: true` flag MUST be set on that first push,
+  // even when each provider's `/v1/models` endpoint hasn't responded yet —
+  // otherwise custom providers from `~/.pi/agent/providers.json` leak into
+  // Settings → Provider Authentication → API Keys (where they don't belong;
+  // the LLM Providers section already manages them).
+
+  it("custom flag is set on first providers_list push, before discoverModels resolves (regression)", async () => {
+    const mod = await importFresh();
+    const { pi } = makeMockPi();
+
+    // Capture event handlers so we can fire model_select to set modelRegistryRef.
+    const handlers = new Map<string, (event: any, ctx: any) => Promise<void> | void>();
+    pi.on = vi.fn((event: string, handler: any) => { handlers.set(event, handler); });
+
+    // Stub fetch with a never-resolving promise — simulates a slow or
+    // unreachable /v1/models endpoint. The fix's correctness does NOT depend
+    // on this resolving; the synchronous `lastRegistered.set` runs before the
+    // await.
+    let resolveFetch: ((value: Response) => void) | null = null;
+    globalThis.fetch = vi.fn(
+      () => new Promise<Response>((r) => { resolveFetch = r; }),
+    ) as any;
+
+    // Two custom providers. With the fix, both end up in lastRegistered
+    // synchronously when activate() iterates them.
+    writeProvidersJson(tmpHome, {
+      proxy: { baseUrl: "https://example.com/v1", apiKey: "sk-test", api: "openai-completions" },
+      "your-llmproxy": { baseUrl: "https://example2.com/v1", apiKey: "sk-test", api: "openai-completions" },
+    });
+
+    // activate() fires registerEntry async (.catch(() => {})). The synchronous
+    // body runs to the first await before yielding.
+    mod.activate(pi);
+
+    // Capture modelRegistry via a model_select event — buildProviderCatalogue()
+    // returns [] when modelRegistryRef is null. We use model_select rather
+    // than session_start because session_start would re-register every entry
+    // (also stalling on the never-resolving fetch).
+    const fakeRegistry = {
+      find: () => null,
+      getAll: () => [
+        { provider: "proxy", id: "some-model" },
+        { provider: "your-llmproxy", id: "some-model" },
+        { provider: "deepseek", id: "deepseek-chat" },
+      ],
+      getProviderDisplayName: (id: string) => id,
+      authStorage: {
+        getOAuthProviders: () => [],
+        getAuthStatus: () => ({ configured: false }),
+        get: () => undefined,
+      },
+    };
+    const modelSelectHandler = handlers.get("model_select");
+    expect(modelSelectHandler).toBeDefined();
+    await modelSelectHandler!({}, { modelRegistry: fakeRegistry, model: undefined });
+
+    // Build the catalogue while discovery is still in flight. With the fix,
+    // both custom providers are flagged custom: true. Without it, lastRegistered
+    // is still empty (the post-await `lastRegistered.set` never runs because
+    // fetch never resolves) and the flags are missing.
+    const cat = mod.buildProviderCatalogue();
+
+    expect(cat.find((c) => c.id === "proxy")?.custom).toBe(true);
+    expect(cat.find((c) => c.id === "your-llmproxy")?.custom).toBe(true);
+    // Built-in pi-ai providers must remain unflagged.
+    expect(cat.find((c) => c.id === "deepseek")?.custom).toBeUndefined();
+
+    // Cleanup: settle the dangling fetches so the test process doesn't leak.
+    if (resolveFetch) resolveFetch(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+  });
+
   it("discovered unknown model falls back to api-appropriate defaults (openai-completions → 128k)", async () => {
     const mod = await importFresh();
     const { pi, registerProvider } = makeMockPi();

@@ -19,6 +19,14 @@ interface Props {
   fileResults?: { query: string; files: FileEntry[] } | null;
   disabled?: boolean;
   sessionStatus?: "idle" | "streaming" | "ended";
+  /**
+   * True iff an LLM-provider auto-retry is in flight (pi-coding-agent
+   * sleeping between attempts). Treated as "still working" for Stop/
+   * Force-Stop visibility, since `sessionStatus` may briefly read `idle`
+   * between retries.
+   * See change: fix-provider-retry-infinite-loop.
+   */
+  retrying?: boolean;
   onAbort?: () => void;
   onForceKill?: () => void;
   pendingPrompt?: boolean;
@@ -100,7 +108,9 @@ function extractAtQuery(text: string): string | null {
 
 type StopState = "idle" | "aborting" | "killing";
 
-export function CommandInput({ commands: externalCommands, onSend, onListFiles, fileResults, disabled, sessionStatus, onAbort, onForceKill, pendingPrompt, onCancelPending, sessionId, draft, onDraftChange, history, images, onImagesChange }: Props) {
+export function CommandInput({ commands: externalCommands, onSend, onListFiles, fileResults, disabled, sessionStatus, retrying, onAbort, onForceKill, pendingPrompt, onCancelPending, sessionId, draft, onDraftChange, history, images, onImagesChange }: Props) {
+  // Treat retry-sleep as "still working" for Stop/Force-Stop visibility.
+  const isWorking = sessionStatus === "streaming" || retrying === true;
   // Merge server commands with built-in commands, avoiding duplicates
   const commands = useMemo(() => {
     const names = new Set(externalCommands.map((c) => c.name));
@@ -130,8 +140,8 @@ export function CommandInput({ commands: externalCommands, onSend, onListFiles, 
 
   // Reset stop state when session stops streaming
   useEffect(() => {
-    if (sessionStatus !== "streaming") setStopState("idle");
-  }, [sessionStatus]);
+    if (sessionStatus !== "streaming" && !retrying) setStopState("idle");
+  }, [sessionStatus, retrying]);
 
   // Reset history-navigation state whenever the session changes.
   useEffect(() => {
@@ -478,7 +488,7 @@ export function CommandInput({ commands: externalCommands, onSend, onListFiles, 
         >
           <Icon path={mdiPlay} size={0.7} />
         </button>
-        {(sessionStatus === "streaming" || pendingPrompt) && (onAbort || onCancelPending) && stopState === "idle" && (
+        {(isWorking || pendingPrompt) && (onAbort || onCancelPending) && stopState === "idle" && (
           <button
             onClick={() => {
               if (pendingPrompt) {
@@ -495,7 +505,7 @@ export function CommandInput({ commands: externalCommands, onSend, onListFiles, 
             <Icon path={mdiStop} size={0.7} />
           </button>
         )}
-        {sessionStatus === "streaming" && stopState === "aborting" && onForceKill && (
+        {isWorking && stopState === "aborting" && onForceKill && (
           <button
             onClick={() => { onForceKill(); setStopState("killing"); }}
             className="p-2 bg-orange-600 rounded-lg hover:bg-orange-500 self-end animate-pulse"
@@ -505,7 +515,7 @@ export function CommandInput({ commands: externalCommands, onSend, onListFiles, 
             <Icon path={mdiAlert} size={0.7} />
           </button>
         )}
-        {sessionStatus === "streaming" && stopState === "killing" && (
+        {isWorking && stopState === "killing" && (
           <button
             disabled
             className="p-2 bg-orange-800 rounded-lg opacity-60 cursor-not-allowed self-end"

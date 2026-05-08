@@ -1,11 +1,19 @@
 /**
  * Read/write ~/.pi/agent/auth.json for pi provider credentials.
  * Uses lockfile + atomic write to avoid race conditions with running pi sessions.
+ *
+ * The OAuth provider list derives from the local handler registry
+ * (`getAllHandlers()` in provider-auth-handlers.ts). The API-key list
+ * derives from the bridge-pushed catalogue (provider-catalogue-cache.ts).
+ * See change: replace-hardcoded-provider-lists.
  */
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { ProviderAuthStatus } from "@blackbelt-technology/pi-dashboard-shared/rest-api.js";
+import type { ProviderInfo } from "@blackbelt-technology/pi-dashboard-shared/types.js";
+import { getAllHandlers, type ProviderHandler } from "./provider-auth-handlers.js";
+import { getLatestCatalogue } from "./provider-catalogue-cache.js";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -21,32 +29,11 @@ export type OAuthCredential = { type: "oauth"; refresh: string; access: string; 
 export type AuthCredential = ApiKeyCredential | OAuthCredential;
 export type AuthData = Record<string, AuthCredential>;
 
-// ── OAuth provider metadata (for status display) ────────────────────────────
-
 interface OAuthProviderMeta {
   id: string;
   name: string;
   flowType: "auth_code" | "device_code";
 }
-
-const OAUTH_PROVIDERS: OAuthProviderMeta[] = [
-  { id: "anthropic", name: "Anthropic (Claude Pro/Max)", flowType: "auth_code" },
-  { id: "openai-codex", name: "ChatGPT Plus/Pro (Codex)", flowType: "auth_code" },
-  { id: "github-copilot", name: "GitHub Copilot", flowType: "device_code" },
-  { id: "google-gemini-cli", name: "Google Gemini CLI", flowType: "auth_code" },
-  { id: "google-antigravity", name: "Antigravity", flowType: "auth_code" },
-];
-
-const API_KEY_PROVIDERS = [
-  { id: "anthropic-api", authJsonKey: "anthropic", name: "Anthropic (API Key)" },
-  { id: "openai", authJsonKey: "openai", name: "OpenAI" },
-  { id: "google", authJsonKey: "google", name: "Google Gemini (API Key)" },
-  { id: "mistral", authJsonKey: "mistral", name: "Mistral" },
-  { id: "groq", authJsonKey: "groq", name: "Groq" },
-  { id: "xai", authJsonKey: "xai", name: "xAI" },
-  { id: "openrouter", authJsonKey: "openrouter", name: "OpenRouter" },
-  { id: "zai", authJsonKey: "zai", name: "Z.ai" },
-];
 
 // ── Lock helpers ─────────────────────────────────────────────────────────────
 
@@ -114,7 +101,7 @@ function writeAuthJson(data: AuthData): void {
   fs.renameSync(tmp, AUTH_PATH);
 }
 
-// ── Public API ───────────────────────────────────────────────────────────────
+// ── Public API: write/remove ─────────────────────────────────────────────────
 
 export function writeCredential(provider: string, credential: AuthCredential): void {
   acquireLock();
@@ -138,63 +125,108 @@ export function removeCredential(provider: string): void {
   }
 }
 
-export function getAuthStatus(): ProviderAuthStatus[] {
-  const data = readAuthJson();
-  const statuses: ProviderAuthStatus[] = [];
+// ── Pure status builder (testable) ───────────────────────────────────────────
 
-  // OAuth providers
-  for (const p of OAUTH_PROVIDERS) {
-    const cred = data[p.id];
+/**
+ * Pure derivation of `ProviderAuthStatus[]` from auth.json data, the
+ * bridge-pushed provider catalogue, and the local OAuth handler set.
+ * No I/O. See change: replace-hardcoded-provider-lists.
+ */
+export function _buildAuthStatus(
+  catalogue: ProviderInfo[],
+  authData: AuthData,
+  oauthHandlers: ProviderHandler[],
+): ProviderAuthStatus[] {
+  const statuses: ProviderAuthStatus[] = [];
+  const oauthIds = new Set(oauthHandlers.map((h) => h.providerId));
+
+  // OAuth rows from local handler registry.
+  for (const h of oauthHandlers) {
+    const cred = authData[h.providerId];
     if (cred && cred.type === "oauth") {
       statuses.push({
-        id: p.id,
-        name: p.name,
-        flowType: p.flowType,
+        id: h.providerId,
+        name: h.displayName,
+        flowType: h.flowType,
         authenticated: true,
         expires: (cred as OAuthCredential).expires,
       });
     } else {
       statuses.push({
-        id: p.id,
-        name: p.name,
-        flowType: p.flowType,
+        id: h.providerId,
+        name: h.displayName,
+        flowType: h.flowType,
         authenticated: false,
       });
     }
   }
 
-  // API key providers (skip if the same key is already shown as OAuth)
-  for (const p of API_KEY_PROVIDERS) {
-    const cred = data[p.authJsonKey];
-    // If key is already listed as OAuth provider (e.g., "anthropic"), skip the API key variant
-    if (OAUTH_PROVIDERS.some((op) => op.id === p.authJsonKey) && cred?.type === "oauth") continue;
-    const hasKey = !!(cred && cred.type === "api_key" && (cred as ApiKeyCredential).key);
-    const entry: ProviderAuthStatus = {
-      id: p.id,
-      name: p.name,
+  // API-key rows from bridge-pushed catalogue.
+  // Skip custom providers (registered via pi.registerProvider() from
+  // ~/.pi/agent/providers.json) — those are managed by the dedicated
+  // LLM Providers settings section. OAuth rows for custom providers
+  // were already emitted above when the OAuth handler registry has
+  // a matching id.
+  for (const entry of catalogue) {
+    if (entry.custom) continue;
+    const hasOAuthCollision = oauthIds.has(entry.id);
+    const uiId = hasOAuthCollision ? `${entry.id}-api` : entry.id;
+    const displayName = hasOAuthCollision
+      ? `${entry.displayName} (API Key)`
+      : entry.displayName;
+    const authJsonKey = entry.id;
+    const cred = authData[authJsonKey];
+    const hasStoredKey = !!(cred && cred.type === "api_key" && (cred as ApiKeyCredential).key);
+
+    const row: ProviderAuthStatus = {
+      id: uiId,
+      name: displayName,
       flowType: "api_key",
-      authenticated: hasKey,
+      authenticated: hasStoredKey || !!entry.ambient,
     };
-    if (hasKey) {
+    if (hasStoredKey) {
       const key = (cred as ApiKeyCredential).key;
-      entry.maskedKey = key.length >= 12 ? `${key.slice(0, 5)}...${key.slice(-3)}` : "****";
+      row.maskedKey = key.length >= 12 ? `${key.slice(0, 5)}...${key.slice(-3)}` : "****";
+    } else if (entry.ambient) {
+      row.maskedKey = "(ambient)";
     }
-    statuses.push(entry);
+    if (entry.envVar) row.envVar = entry.envVar;
+    if (entry.ambient) row.ambient = true;
+    statuses.push(row);
   }
 
   return statuses;
 }
 
+// ── Public API: status / OAuth meta / id resolution ─────────────────────────
+
+export function getAuthStatus(): ProviderAuthStatus[] {
+  return _buildAuthStatus(getLatestCatalogue(), readAuthJson(), getAllHandlers());
+}
+
 export function getOAuthProvidersMeta(): OAuthProviderMeta[] {
-  return OAUTH_PROVIDERS;
+  return getAllHandlers().map((h) => ({
+    id: h.providerId,
+    name: h.displayName,
+    flowType: h.flowType,
+  }));
 }
 
 /**
  * Resolve a UI provider ID to the auth.json key.
- * API key providers have an `authJsonKey` mapping (e.g., "anthropic-api" → "anthropic").
- * OAuth providers and unknown IDs pass through unchanged.
+ *
+ * The catalogue encodes API-key rows with `<id>-api` suffix when an
+ * OAuth handler exists for the same id. This unwraps the suffix back
+ * to the underlying auth.json key. OAuth ids pass through unchanged
+ * (their UI id == their auth.json key). Unknown ids pass through too,
+ * matching the previous behavior.
  */
 export function resolveAuthJsonKey(providerId: string): string {
-  const apiKeyProvider = API_KEY_PROVIDERS.find(p => p.id === providerId);
-  return apiKeyProvider?.authJsonKey ?? providerId;
+  const oauthIds = new Set(getAllHandlers().map((h) => h.providerId));
+  // <id>-api suffix → strip suffix iff the bare id is an OAuth handler.
+  if (providerId.endsWith("-api")) {
+    const bare = providerId.slice(0, -"-api".length);
+    if (oauthIds.has(bare)) return bare;
+  }
+  return providerId;
 }

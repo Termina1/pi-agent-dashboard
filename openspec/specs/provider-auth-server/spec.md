@@ -1,11 +1,18 @@
-## ADDED Requirements
+# provider-auth-server Specification
 
+## Purpose
+Server-side contract for managing pi LLM provider credentials: OAuth handler registry, `auth.json` CRUD with atomic write+lockfile, the bridge-pushed provider catalogue cache, and the `GET /api/provider-auth/status` API surface that drives the Settings → Provider Authentication UI.
+## Requirements
 ### Requirement: OAuth provider registry
-The server SHALL maintain a registry of OAuth provider handlers. Each handler SHALL expose its provider ID, display name, flow type (`auth_code` or `device_code`), and methods for its specific OAuth flow. The registry SHALL include handlers for: `anthropic`, `openai-codex`, `github-copilot`, `google-gemini-cli`, and `google-antigravity`.
+The server SHALL maintain a registry of OAuth provider handlers. Each handler SHALL expose its provider ID, display name, flow type (`auth_code` or `device_code`), and methods for its specific OAuth flow. The registry of available OAuth providers exposed by `GET /api/provider-auth/providers` SHALL be derived directly from the registered handler set, not from a separately maintained list. Each handler SHALL carry its own `displayName` field, removing the need for any duplicated `OAUTH_PROVIDERS` array elsewhere in the server module. The registry SHALL include handlers for: `anthropic`, `openai-codex`, `github-copilot`, `google-gemini-cli`, and `google-antigravity`.
 
 #### Scenario: List available OAuth providers
 - **WHEN** a client requests `GET /api/provider-auth/providers`
-- **THEN** the server SHALL return a JSON array of objects, each containing `id`, `name`, and `flowType` for every registered OAuth provider
+- **THEN** the server SHALL return a JSON array of objects, each containing `id`, `name`, and `flowType` for every registered OAuth handler, with `name` taken from the handler's `displayName` field
+
+#### Scenario: Adding a new OAuth handler is the only required change
+- **WHEN** a developer registers a new handler in the handler registry with `providerId`, `displayName`, and `flowType`
+- **THEN** the new provider SHALL appear in the `GET /api/provider-auth/providers` response without any change to a separate provider list
 
 ### Requirement: Auth-code OAuth flow — authorize
 For auth-code providers (Anthropic, OpenAI Codex, Gemini CLI, Antigravity), the server SHALL generate a PKCE code verifier and challenge, build the provider's authorization URL with the dashboard's callback redirect URI, and return the auth URL along with a flow ID. The server SHALL store the PKCE verifier and state server-side, keyed by flow ID.
@@ -76,16 +83,42 @@ The server SHALL serve a callback route at `GET /api/provider-auth/callback/:pro
 - **THEN** the callback page SHALL relay the error to the opener via the same channels
 
 ### Requirement: API key provider registry
-The server SHALL maintain an `API_KEY_PROVIDERS` array of API key provider definitions. Each entry SHALL have `id`, `authJsonKey`, and `name`. The registry SHALL include: `anthropic-api`, `openai`, `google`, `mistral`, `groq`, `xai`, `openrouter`, and `zai`.
+The server SHALL derive the list of API-key providers from the bridge-pushed provider catalogue (`providers_list` message), NOT from a hardcoded array. The most recently received catalogue is cached per pi process; on cache miss the server SHALL proactively send `request_providers` and use an empty list until the bridge responds. For every entry in the cached catalogue:
 
-#### Scenario: Z.ai provider appears in status
-- **WHEN** a client requests `GET /api/provider-auth/status`
-- **THEN** the response SHALL include an entry with `id: "zai"`, `name: "Z.ai"`, `flowType: "api_key"`
+- If the catalogue id collides with a registered OAuth handler's `providerId`, the API-key row SHALL use the suffixed UI id `${id}-api`, the suffixed display name `${displayName} (API Key)`, and an `authJsonKey` equal to the unsuffixed catalogue id.
+- If the catalogue id has no OAuth handler counterpart, the API-key row SHALL use the bare id and bare display name, with `authJsonKey` equal to the id.
 
-#### Scenario: Z.ai provider with saved key
-- **WHEN** `auth.json` contains `{ "zai": { "type": "api_key", "key": "zai-testkey123abc" } }`
+The server SHALL pass the catalogue's `envVar` and `ambient` fields straight through to the corresponding `ProviderAuthStatus` rows. When `ambient: true`, the server SHALL force `authenticated: true` and `maskedKey: "(ambient)"` even when `auth.json` has no entry for `authJsonKey`.
+
+#### Scenario: Catalogue from bridge defines the API-key list
+- **WHEN** the bridge has pushed `providers_list` containing 25 entries (anthropic, deepseek, fireworks, ...)
 - **AND** a client requests `GET /api/provider-auth/status`
-- **THEN** the `zai` entry SHALL have `authenticated: true` and a `maskedKey` value
+- **THEN** the response SHALL include one row per entry, with `flowType: "api_key"` for non-OAuth ids and the `<id>-api` suffix for OAuth-collision ids
+
+#### Scenario: OAuth/API-key collision uses suffixed id
+- **WHEN** the catalogue contains an entry with `id: "anthropic"` and `hasOAuth: true`
+- **AND** the OAuth handler set contains a handler with `providerId: "anthropic"`
+- **THEN** the status response SHALL contain two distinct rows: one OAuth row with `id: "anthropic"`, `name: "Anthropic (Claude Pro/Max)"`, `flowType: "auth_code"` (from the handler), and one API-key row with `id: "anthropic-api"`, `name: "Anthropic (API Key)"`, `flowType: "api_key"`, `authJsonKey: "anthropic"`
+
+#### Scenario: Provider with no OAuth uses bare id
+- **WHEN** the catalogue contains an entry with `id: "deepseek"`, `hasOAuth: false`
+- **THEN** the status response SHALL contain one row with `id: "deepseek"`, `flowType: "api_key"`, `authJsonKey: "deepseek"`
+
+#### Scenario: Env-var hint surfaces from catalogue
+- **WHEN** the catalogue's `openai` entry has `envVar: "OPENAI_API_KEY"`
+- **THEN** the corresponding row in the status response SHALL include `envVar: "OPENAI_API_KEY"`
+
+#### Scenario: Ambient credentials marked authenticated
+- **WHEN** the catalogue's `google-vertex` entry has `ambient: true`
+- **THEN** the row SHALL have `authenticated: true`, `ambient: true`, and `maskedKey: "(ambient)"` regardless of `auth.json` contents
+
+#### Scenario: Catalogue not yet received
+- **WHEN** the server has not yet received any `providers_list` from any bridge
+- **THEN** the API-key portion of the status response SHALL be an empty array, the OAuth portion SHALL still be returned, and the server SHALL have proactively sent `request_providers` to all connected bridges
+
+#### Scenario: Extension-registered provider appears
+- **WHEN** another pi extension calls `pi.registerProvider("custom-llm", ...)` and the bridge pushes a fresh `providers_list`
+- **THEN** the server cache SHALL be updated and a `custom-llm` row (or `custom-llm-api` if the OAuth handler set grows) SHALL appear in the next `GET /api/provider-auth/status` response without any server restart
 
 ### Requirement: API key masking format
 When displaying a saved API key in the status response, the server SHALL mask the key by showing the first 5 characters, followed by `...`, followed by the last 3 characters. For keys shorter than 12 characters, the server SHALL return `****` instead.
@@ -103,11 +136,50 @@ When displaying a saved API key in the status response, the server SHALL mask th
 - **THEN** the provider SHALL have `authenticated: false` and no `maskedKey`
 
 ### Requirement: Credential status API
-The server SHALL expose `GET /api/provider-auth/status` returning the authentication status of all providers. For each provider it SHALL return: `id`, `name`, `flowType`, `authenticated` (boolean), and for OAuth providers the `expires` timestamp if authenticated. The server SHALL NOT return tokens or secrets.
+The server SHALL expose `GET /api/provider-auth/status` returning the authentication status of all providers. For each provider it SHALL return: `id`, `name`, `flowType`, `authenticated` (boolean), and for OAuth providers the `expires` timestamp if authenticated. For API-key providers the response MAY include `envVar` (string, name of the env variable pi-ai consults for this provider) and `ambient` (boolean, true when the provider is configured via an ambient credential chain such as AWS profile or Google ADC). The server SHALL NOT return tokens or secrets.
 
 #### Scenario: Mixed authenticated and unauthenticated providers
 - **WHEN** `auth.json` contains credentials for `anthropic` and `openai` but not `github-copilot`
 - **THEN** the status response SHALL show `authenticated: true` with `expires` for `anthropic`, `authenticated: true` for `openai` (API key, no expiry), and `authenticated: false` for `github-copilot`
+
+#### Scenario: API-key row carries envVar hint
+- **WHEN** the catalogue's `mistral` entry has `envVar: "MISTRAL_API_KEY"` and `auth.json` has no `mistral` entry
+- **THEN** the `mistral` row in the status response SHALL include `envVar: "MISTRAL_API_KEY"` and `authenticated: false`
+
+### Requirement: Credentials updated triggers per-session model refresh
+When the server persists a credential change (`PUT /api/provider-auth/api-key`, `DELETE /api/provider-auth/:provider`, OAuth callback success, device-code completion, `PUT /api/providers`), it SHALL broadcast `credentials_updated` to every connected bridge so they reload `auth.json` + `~/.pi/agent/providers.json` and refresh their `ModelRegistry`. Each bridge SHALL then push a fresh per-session `models_list` (and `providers_list`) which the server forwards to browsers via the existing per-session broadcast.
+
+The server SHALL NOT broadcast `models_refreshed` from any path. The previous design used a global broadcast that wiped every browser's `modelsMap` and re-requested only for the currently-selected session, which left previously-visited sessions in `subscribedRef` with empty dropdowns. The per-session `models_list` channel is self-healing without a wipe (see capability `model-refresh`).
+
+The catalogue cache (`provider-catalogue-cache.ts`) is a pure read consumer for `GET /api/provider-auth/status`. Its update on `providers_list` arrival is idempotent and unobserved by browsers — the Settings UI re-fetches via the row-level `onChanged` callback after CRUD operations and via OAuth-flow polling during sign-in.
+
+#### Scenario: Refresh after API-key write
+- **WHEN** a client writes a new API key via `PUT /api/provider-auth/api-key`
+- **THEN** the server SHALL persist the credential, broadcast `credentials_updated` to bridges, and return `{ ok: true }`
+- **AND** each bridge SHALL push a fresh `models_list` for its own `sessionId` covering the new credential
+- **AND** the server SHALL NOT broadcast `models_refreshed` to browsers
+
+#### Scenario: Refresh after custom provider added
+- **WHEN** a client writes a new custom provider via `PUT /api/providers`
+- **THEN** the server SHALL persist the entry to `~/.pi/agent/providers.json`, broadcast `credentials_updated` to bridges, and return `{ success: true }`
+- **AND** each bridge SHALL run `reloadProviders(pi)` (registering the new provider via `pi.registerProvider(...)` after async `discoverModels`)
+- **AND** each bridge SHALL push fresh per-session `models_list` (and `providers_list`) reflecting the new provider's models
+- **AND** the server SHALL NOT broadcast `models_refreshed` to browsers
+
+#### Scenario: providers_list arrival does NOT broadcast
+- **WHEN** the bridge for any session sends a `providers_list` (initial connect, fork, resume, reconnect, content change, or response to `request_providers`)
+- **THEN** the server SHALL overwrite the cached catalogue snapshot via `setCatalogueForSession`
+- **AND** the server SHALL NOT broadcast `models_refreshed` to browsers regardless of whether contents changed
+
+#### Scenario: New session spawn does NOT wipe other sessions' models
+- **WHEN** a new pi process spawns and its bridge sends its first `providers_list` and `models_list`
+- **THEN** the server SHALL forward `models_list` per-session via `broadcastToAll`
+- **AND** the server SHALL update the catalogue cache silently
+- **AND** previously-visited sessions in browsers' `subscribedRef` SHALL retain their `modelsMap` entries unchanged
+
+#### Scenario: Stale browser query before refresh completes
+- **WHEN** a client polls `GET /api/provider-auth/status` immediately after a write, before the bridge round-trip completes
+- **THEN** the response SHALL reflect the previous catalogue plus the just-written `auth.json` change (the server-side `auth.json` masked-key extraction is local and immediate; only the env/ambient fields lag the bridge round-trip)
 
 ### Requirement: API key CRUD
 The server SHALL expose `PUT /api/provider-auth/api-key` accepting `{ provider, key }` to save an API key credential, and `DELETE /api/provider-auth/:provider` to remove any credential (OAuth or API key). Both SHALL write to `auth.json` atomically with file locking.
@@ -137,3 +209,4 @@ After any credential write (OAuth save, API key save, or credential removal), th
 #### Scenario: OAuth login triggers bridge notification
 - **WHEN** a user completes OAuth login for Anthropic
 - **THEN** the server SHALL send `{ type: "credentials_updated" }` to all connected bridge extensions via the pi gateway
+

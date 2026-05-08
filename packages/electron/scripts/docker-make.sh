@@ -15,6 +15,44 @@ ELECTRON_DIR="packages/electron"
 
 echo "→ Building for $PLATFORM-$ARCH..."
 
+# Safety net: ensure all source files are readable by the container.
+# macOS hosts can carry extended attributes (xattr `@` flag) that
+# Docker Desktop's gRPC FUSE / VirtioFS layer occasionally translates
+# into broken read perms inside the container. Force `u+rwX,go+rX`
+# across the project tree so subsequent reads (forge asar pack,
+# bundle-server cp) never hit EACCES on a benign config file.
+chmod -R u+rwX,go+rX /build/packages /build/node_modules 2>/dev/null || true
+# Pre-clean any stale per-platform output dirs from prior interrupted
+# runs (forge's asar step can leave files in `--w-------` mode).
+if [ -d /build/packages/electron/out ]; then
+  chmod -R u+rwX /build/packages/electron/out 2>/dev/null || true
+  rm -rf /build/packages/electron/out/PI-Dashboard-$PLATFORM-* 2>/dev/null || true
+fi
+
+# Add Linux-specific optional deps that the host's node_modules lacks.
+# The host installed on macOS/Windows so it has darwin/win32 variants
+# of @rollup, @swc, etc. — not the linux-x64-gnu variants Docker needs.
+#
+# IMPORTANT: do NOT delete the host's existing platform packages. The
+# project root is bind-mounted into Docker, so any rm inside the
+# container also wipes the host's node_modules. We `npm install` the
+# missing Linux packages directly without --save, so:
+#   - host's darwin/win32 packages stay intact
+#   - linux variants are added alongside
+#   - subsequent host `npm run build` keeps working
+#
+# See: https://github.com/npm/cli/issues/4828
+if [ ! -f /build/node_modules/@rollup/rollup-linux-$ARCH-gnu/package.json ]; then
+  echo "→ Installing missing Linux-$ARCH optional deps..."
+  cd /build
+  npm install --no-save --no-audit --no-fund --prefer-offline \
+    "@rollup/rollup-linux-$ARCH-gnu" 2>&1 | tail -3 || true
+  # Other native build tools that may be missing on Linux:
+  npm install --no-save --no-audit --no-fund --prefer-offline \
+    "@swc/core-linux-$ARCH-gnu" 2>&1 | tail -3 || true
+  cd /build
+fi
+
 # Bundle server source (no npm install — that happens here for correct native binaries)
 echo "→ Bundling dashboard server source..."
 node "$ELECTRON_DIR/scripts/bundle-server.mjs" --source-only
@@ -34,18 +72,28 @@ cd "$ELECTRON_DIR/resources/server"
 npm install --omit=dev --no-audit --no-fund 2>&1 | tail -5 || true
 
 # Replace workspace symlinks with actual copies.
-# npm workspaces create symlinks in node_modules/ pointing to packages/.
-# These symlinks break when extracted from archives (7z portable, asar).
-for link in node_modules/@blackbelt-technology/pi-dashboard-shared \
-           node_modules/@blackbelt-technology/pi-dashboard-extension \
-           node_modules/@blackbelt-technology/pi-dashboard-server; do
-  if [ -L "$link" ]; then
-    target=$(readlink -f "$link")
-    rm "$link"
-    cp -R "$target" "$link"
-    echo "  ✓ Replaced symlink: $(basename $link)"
-  fi
-done
+# npm workspaces create symlinks in node_modules/@blackbelt-technology/* that
+# point to /build/packages/<name>/. These symlinks break when:
+#   * extracted on Windows (target path is a Linux absolute path),
+#   * walked by node's cpSync during Electron's first-run extract
+#     (recursive walk hits a broken symlink, ENOTDIR on opendir).
+# Iterate every entry under node_modules/@blackbelt-technology/ rather than
+# a hardcoded list — prior versions missed `dashboard-plugin-runtime`, which
+# server/package.json depends on. Any new workspace dep is auto-handled.
+if [ -d node_modules/@blackbelt-technology ]; then
+  for link in node_modules/@blackbelt-technology/*; do
+    if [ -L "$link" ]; then
+      target=$(readlink -f "$link")
+      if [ -d "$target" ]; then
+        rm "$link"
+        cp -R "$target" "$link"
+        echo "  ✓ Replaced symlink: $(basename "$link") → $(basename "$target")"
+      else
+        echo "  ⚠ Symlink target missing, leaving as-is: $link → $target"
+      fi
+    fi
+  done
+fi
 
 # Platform-specific native module handling
 if [ "$PLATFORM" = "linux" ]; then
@@ -121,7 +169,9 @@ if [ "$PLATFORM" = "win32" ]; then
   cp "/tmp/node-$VERSION-win-$ARCH/npm.cmd" "$NODE_DIR/"
   cp "/tmp/node-$VERSION-win-$ARCH/npx.cmd" "$NODE_DIR/"
 
-  # Package with Forge (package only — skip makers, NSIS can't run on Linux)
+  # Package with Forge (package only — forge has no Windows maker we use
+  # since NSIS was removed; we produce ZIP via `zip` below and an optional
+  # 7-Zip SFX portable .exe via electron-builder).
   cd /build/packages/electron
   ../../node_modules/.bin/electron-forge package --platform win32 --arch "$ARCH"
 
@@ -147,14 +197,22 @@ if [ "$PLATFORM" = "win32" ]; then
   zip -r -q "../out/make/zip/$ARCH/$ZIP_NAME" "PI-Dashboard-win32-$ARCH/"
   cd /build/packages/electron
 
-  # 2. Portable exe (self-extracting) — skipped when ZIP_ONLY=1
+  # 2. Portable exe (7-Zip SFX via electron-builder). Skipped when
+  # ZIP_ONLY=1 — build-installer.sh --windows-zip and build-windows-zip.sh
+  # --no-portable both set this. ZIP is always produced above.
   if [ "${ZIP_ONLY:-0}" = "1" ]; then
     echo "→ Skipping portable exe (ZIP_ONLY=1)"
   else
-  echo "→ Building portable exe..."
-  npx electron-builder --win portable --$ARCH \
-    --prepackaged "$PACKAGED_DIR" \
-    --config <(cat <<EOF
+    echo "→ Building portable exe..."
+    # Disable code-signing: no cert configured, but electron-builder otherwise
+    # auto-discovers system certs and runs osslsigncode on the 169 MB SFX.
+    # See: signtoolOptions:null in the inline config below + these env vars.
+    export CSC_IDENTITY_AUTO_DISCOVERY=false
+    export WIN_CSC_LINK=
+    export CSC_LINK=
+    npx electron-builder --win portable --$ARCH \
+      --prepackaged "$PACKAGED_DIR" \
+      --config <(cat <<EOF
 {
   "appId": "com.blackbelt-technology.pi-dashboard",
   "productName": "PI Dashboard",
@@ -163,7 +221,8 @@ if [ "$PLATFORM" = "win32" ]; then
   "portable": { "artifactName": "PI-Dashboard-portable.exe" },
   "win": {
     "icon": "resources/icon.ico",
-    "target": ["portable"]
+    "target": ["portable"],
+    "signtoolOptions": null
   }
 }
 EOF

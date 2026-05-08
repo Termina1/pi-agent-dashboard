@@ -23,6 +23,7 @@ import type { SpawnStrategy } from "@blackbelt-technology/pi-dashboard-shared/co
 import { MANAGED_BIN } from "@blackbelt-technology/pi-dashboard-shared/managed-paths.js";
 import { ToolResolver } from "@blackbelt-technology/pi-dashboard-shared/platform/binary-lookup.js";
 import { prependManagedNodeToPath } from "@blackbelt-technology/pi-dashboard-shared/platform/managed-node-path.js";
+import { mintSpawnToken } from "./spawn-token.js";
 import { execSync, spawnSync, buildSafeArgv } from "@blackbelt-technology/pi-dashboard-shared/platform/exec.js";
 import {
   spawnDetached,
@@ -57,6 +58,15 @@ export interface SessionOptions {
   sessionFile?: string;
   mode?: "continue" | "fork";
   strategy?: SpawnStrategy;
+  /**
+   * Server-minted spawn correlation token. When provided, injected into
+   * the spawned process env as `PI_DASHBOARD_SPAWN_TOKEN`. The bridge
+   * echoes it back in the first `session_register` so the server can
+   * resolve identity precisely (linkByToken). When omitted, callers
+   * fall through to pid-link or cwd-FIFO matching.
+   * See change: spawn-correlation-token.
+   */
+  spawnToken?: string;
 }
 
 export interface SpawnResult {
@@ -72,6 +82,13 @@ export interface SpawnResult {
   stderr?: string;
   /** Path to the per-session stderr log (Windows headless). Forwarded to watchdog. See change: spawn-failure-diagnostics. */
   logPath?: string;
+  /**
+   * Token minted by `spawnPiSession` and injected into the spawned process's
+   * env as `PI_DASHBOARD_SPAWN_TOKEN`. Returned so callers can register it
+   * with the headless-pid registry, watchdog, and pending-* registries.
+   * See change: spawn-correlation-token.
+   */
+  spawnToken?: string;
 }
 
 /**
@@ -87,8 +104,18 @@ export interface SpawnResult {
  * lands at the very head of `PATH` — spawned children invoking plain
  * `node` / `npm` resolve to the managed runtime first.
  */
-export function buildSpawnEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return prependManagedNodeToPath(resolver.buildSpawnEnv(baseEnv));
+export function buildSpawnEnv(
+  baseEnv: NodeJS.ProcessEnv = process.env,
+  opts?: { spawnToken?: string },
+): NodeJS.ProcessEnv {
+  const env = prependManagedNodeToPath(resolver.buildSpawnEnv(baseEnv));
+  if (opts?.spawnToken) {
+    // Inject the correlation token so the bridge inside the spawned pi
+    // process can read it and echo back in `session_register`.
+    // See change: spawn-correlation-token.
+    return { ...env, PI_DASHBOARD_SPAWN_TOKEN: opts.spawnToken };
+  }
+  return env;
 }
 
 /**
@@ -279,14 +306,25 @@ export async function spawnPiSession(
     return { success: false, code: "DIR_MISSING", message: `Directory does not exist: ${cwd}` };
   }
 
-  const mechanism = chooseMechanism(options, options?.electronMode ?? false);
+  // Mint a spawn token if the caller didn't provide one. Token is injected
+  // into the spawned process's env (via buildSpawnEnv) and surfaced on
+  // SpawnResult so callers can register it with the registries.
+  // See change: spawn-correlation-token.
+  const spawnToken = options?.spawnToken ?? mintSpawnToken();
+  const opts: SessionOptions & { electronMode?: boolean } = { ...(options ?? {}), spawnToken };
 
+  const mechanism = chooseMechanism(opts, opts?.electronMode ?? false);
+
+  let result: SpawnResult;
   switch (mechanism) {
-    case "tmux":     return spawnTmux(cwd, options);
-    case "wt":       return spawnWt(cwd, options);
-    case "wsl-tmux": return spawnWslTmux(cwd, options);
-    case "headless": return spawnHeadless(cwd, options);
+    case "tmux":     result = spawnTmux(cwd, opts); break;
+    case "wt":       result = await spawnWt(cwd, opts); break;
+    case "wsl-tmux": result = spawnWslTmux(cwd, opts); break;
+    case "headless": result = await spawnHeadless(cwd, opts); break;
   }
+  // Surface the token on every result (success or failure) so callers
+  // can clean up registries deterministically.
+  return { ...result, spawnToken };
 }
 
 // ── Per-mechanism spawn ────────────────────────────────────────────────────
@@ -294,8 +332,12 @@ export async function spawnPiSession(
 function spawnTmux(cwd: string, options?: SessionOptions): SpawnResult {
   const exists = dashboardSessionExists();
   const cmd = buildTmuxCommand(cwd, exists, options);
+  // Pass env explicitly so PI_DASHBOARD_SPAWN_TOKEN reaches the tmux pane's
+  // pi process (tmux inherits the caller's env into new windows/sessions).
+  // See change: spawn-correlation-token.
+  const env = buildSpawnEnv(process.env, { spawnToken: options?.spawnToken });
   try {
-    execSync(cmd, { stdio: "ignore" });
+    execSync(cmd, { stdio: "ignore", env });
     return {
       success: true,
       dashboardSpawned: true,
@@ -309,7 +351,8 @@ function spawnTmux(cwd: string, options?: SessionOptions): SpawnResult {
 function spawnWslTmux(cwd: string, options?: SessionOptions): SpawnResult {
   try {
     const cmd = `wsl ${buildTmuxCommand(cwd, false, options)}`;
-    execSync(cmd, { stdio: "ignore" });
+    const env = buildSpawnEnv(process.env, { spawnToken: options?.spawnToken });
+    execSync(cmd, { stdio: "ignore", env });
     return { success: true, dashboardSpawned: true, message: "Pi session spawned via WSL tmux" };
   } catch (err: any) {
     return { success: false, code: "TMUX_MISSING", message: `Failed to spawn via WSL tmux (wsl-tmux mechanism): ${err.message}` };
@@ -333,7 +376,7 @@ async function spawnWt(cwd: string, options?: SessionOptions): Promise<SpawnResu
     cmd: wt,
     args,
     cwd,
-    env: buildSpawnEnv(),
+    env: buildSpawnEnv(process.env, { spawnToken: options?.spawnToken }),
   });
 
   if (!r.ok) {
@@ -351,7 +394,7 @@ async function spawnWt(cwd: string, options?: SessionOptions): Promise<SpawnResu
 
 async function spawnHeadless(cwd: string, options?: SessionOptions): Promise<SpawnResult> {
   const args = buildHeadlessArgs(options);
-  const env = buildSpawnEnv();
+  const env = buildSpawnEnv(process.env, { spawnToken: options?.spawnToken });
   const piCmd = resolvePiCommand();
   if (!piCmd) {
     return { success: false, code: "PI_NOT_FOUND", message: `pi binary not found. Checked: ${MANAGED_BIN} and system PATH.` };

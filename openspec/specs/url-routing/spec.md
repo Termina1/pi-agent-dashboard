@@ -122,7 +122,7 @@ The server SHALL return `index.html` for any GET request that does not match a s
 - **THEN** the server responds with the actual static file
 
 ### Requirement: Mobile depth includes settings and tunnel routes
-The mobile `MobileShell` depth calculation SHALL treat `/settings` and `/tunnel-setup` as depth-1 routes, alongside `/session/:id` and `/terminal/:id`.
+The mobile `MobileShell` depth calculation SHALL treat `/settings`, `/tunnel-setup`, and `/folder/:encodedCwd/terminals` as depth-1 routes, alongside `/session/:id`.
 
 #### Scenario: Settings route sets mobile depth to 1
 - **WHEN** the current URL is `/settings` on a mobile viewport
@@ -131,6 +131,10 @@ The mobile `MobileShell` depth calculation SHALL treat `/settings` and `/tunnel-
 #### Scenario: Tunnel setup route sets mobile depth to 1
 - **WHEN** the current URL is `/tunnel-setup` on a mobile viewport
 - **THEN** `MobileShell` depth SHALL be 1 and the detail panel SHALL display the Zrok Install Guide
+
+#### Scenario: Folder terminals route sets mobile depth to 1
+- **WHEN** the current URL is `/folder/:encodedCwd/terminals` on a mobile viewport
+- **THEN** `MobileShell` depth SHALL be 1 and the detail panel SHALL display the TerminalsView for the decoded cwd
 
 ### Requirement: Folder terminals route
 The client SHALL define a route `/folder/:encodedCwd/terminals` that displays the TerminalsView for the decoded folder path. The `encodedCwd` SHALL be base64url-encoded.
@@ -151,13 +155,3 @@ The client SHALL define a route `/folder/:encodedCwd/editor` that displays the E
 - **WHEN** user navigates to `/folder/:encodedCwd/editor`
 - **THEN** the EditorView SHALL be displayed for the decoded cwd
 
-### Requirement: Legacy terminal route
-The `/terminal/:id` route SHALL be kept for backward compatibility but is deprecated. New terminal access SHALL use `/folder/:encodedCwd/terminals`. The legacy route SHALL continue to render the existing TerminalView for the selected terminal.
-
-#### Scenario: Legacy terminal route still works
-- **WHEN** user navigates to `/terminal/:id` with a valid terminal ID
-- **THEN** the terminal SHALL be displayed using the existing TerminalView
-
-#### Scenario: New terminal creation uses folder route
-- **WHEN** a new terminal is created via the folder action bar
-- **THEN** the app SHALL navigate to `/folder/:encodedCwd/terminals` (not `/terminal/:id`)

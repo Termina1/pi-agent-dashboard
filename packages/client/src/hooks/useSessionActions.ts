@@ -22,6 +22,13 @@ export interface SessionActionDeps {
   spawnTimeoutsRef: React.MutableRefObject<Map<string, ReturnType<typeof setTimeout>>>;
   pendingTerminalCwdRef: React.MutableRefObject<string | null>;
   terminals: Map<string, TerminalSession>;
+  /**
+   * Maps client-minted `requestId` → originating click metadata. Populated
+   * by `handleSpawnSession` / `handleResumeSession`; consumed by
+   * `useMessageHandler.session_added` for exact auto-select correlation.
+   * See change: spawn-correlation-token.
+   */
+  pendingSpawnsRef: React.MutableRefObject<Map<string, { cwd: string; kind: "spawn" | "resume" }>>;
 }
 
 export function useSessionActions(deps: SessionActionDeps) {
@@ -29,7 +36,18 @@ export function useSessionActions(deps: SessionActionDeps) {
     selectedId, send, navigate, setMobileOpen,
     setSessions, setSessionStates, setSpawningCwds, setTerminals,
     clearSpawningCwd, spawnTimeoutsRef, pendingTerminalCwdRef, terminals,
+    pendingSpawnsRef,
   } = deps;
+
+  // Native crypto.randomUUID is widely available; fall back to a Math.random
+  // UUIDish for legacy environments without it.
+  const mintRequestId = (): string => {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+    // Best-effort fallback (unlikely to hit in supported browsers).
+    return `rq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  };
 
   const handleAbort = useCallback(() => {
     if (selectedId) send({ type: "abort", sessionId: selectedId });
@@ -140,11 +158,18 @@ export function useSessionActions(deps: SessionActionDeps) {
       if (existing) next.set(sessionId, { ...existing, resuming: true });
       return next;
     });
+    // Mint requestId so session_added (for fork mode) carries spawnRequestId
+    // and the client can auto-select the new fork. cwd is left empty here
+    // because resume's parent-session lookup happens server-side; we only
+    // need requestId for the eventual session_added match.
+    // See change: spawn-correlation-token.
+    const requestId = mintRequestId();
+    pendingSpawnsRef.current.set(requestId, { cwd: "", kind: "resume" });
     // Explicit "front" placement: matches today's default but makes the
     // intent visible at the wire level. See change:
     // differentiate-resume-intent-by-trigger.
-    send({ type: "resume_session", sessionId, mode, placement: "front", ...(entryId ? { entryId } : {}) });
-  }, [send, setSessions]);
+    send({ type: "resume_session", sessionId, mode, placement: "front", requestId, ...(entryId ? { entryId } : {}) });
+  }, [send, setSessions, pendingSpawnsRef]);
 
   /**
    * Drag-to-resume entry point. The drop position was just persisted via
@@ -159,8 +184,10 @@ export function useSessionActions(deps: SessionActionDeps) {
       if (existing) next.set(sessionId, { ...existing, resuming: true });
       return next;
     });
-    send({ type: "resume_session", sessionId, mode: "continue", placement: "keep" });
-  }, [send, setSessions]);
+    const requestId = mintRequestId();
+    pendingSpawnsRef.current.set(requestId, { cwd: "", kind: "resume" });
+    send({ type: "resume_session", sessionId, mode: "continue", placement: "keep", requestId });
+  }, [send, setSessions, pendingSpawnsRef]);
 
   const handleSpawnSession = useCallback((cwd: string, attachProposal?: string) => {
     setSpawningCwds((prev) => {
@@ -173,11 +200,20 @@ export function useSessionActions(deps: SessionActionDeps) {
       clearSpawningCwd(cwd);
     }, 30_000);
     spawnTimeoutsRef.current.set(cwd, timer);
+    // Mint requestId for exact auto-select correlation when session_added
+    // arrives. See change: spawn-correlation-token.
+    const requestId = mintRequestId();
+    pendingSpawnsRef.current.set(requestId, { cwd, kind: "spawn" });
     // The optional `attachProposal` field is consumed server-side and applied
     // when the bridge issues `session_register`. See change:
     // add-folder-task-checker-and-spawn-attach.
-    send({ type: "spawn_session", cwd, ...(attachProposal ? { attachProposal } : {}) });
-  }, [send, clearSpawningCwd, setSpawningCwds, spawnTimeoutsRef]);
+    send({
+      type: "spawn_session",
+      cwd,
+      requestId,
+      ...(attachProposal ? { attachProposal } : {}),
+    });
+  }, [send, clearSpawningCwd, setSpawningCwds, spawnTimeoutsRef, pendingSpawnsRef]);
 
   const handleHideSession = useCallback((sessionId: string) => {
     setSessions((prev) => {

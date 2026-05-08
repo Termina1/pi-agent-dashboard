@@ -32,6 +32,12 @@ export interface WatchdogArmOptions {
   mechanism: SpawnMechanism;
   logPath?: string;
   ws: WebSocket;
+  /**
+   * Server-minted spawn correlation token. When provided, the entry is
+   * indexed in `byToken` for strong-identity clearing via `clearByToken`.
+   * See change: spawn-correlation-token.
+   */
+  spawnToken?: string;
 }
 
 interface Entry {
@@ -42,12 +48,14 @@ interface Entry {
   logPath?: string;
   ws: WebSocket;
   timeoutMs: number;
+  spawnToken?: string;
 }
 
 interface RecentlyFiredEntry {
   firedAt: number;
   pid?: number;
   ws: WebSocket;
+  spawnToken?: string;
 }
 
 const RECENTLY_FIRED_TTL_MS = 60_000;
@@ -57,6 +65,7 @@ export class SpawnRegisterWatchdog {
   readonly timeoutMs: number;
   private readonly byPid = new Map<number, Entry>();
   private readonly byCwd = new Map<string, Entry>();
+  private readonly byToken = new Map<string, Entry>();
   private readonly recentlyFired = new Map<string, RecentlyFiredEntry>();
 
   constructor(timeoutMs: number) {
@@ -68,17 +77,60 @@ export class SpawnRegisterWatchdog {
     // takes effect on the next spawn without a server restart.
     // See change: spawn-failure-diagnostics (fix W1).
     const effectiveTimeout = clampSpawnRegisterTimeoutMs(opts.timeoutMs ?? this.timeoutMs);
-    const { pid, cwd, mechanism, logPath, ws } = opts;
+    const { pid, cwd, mechanism, logPath, ws, spawnToken } = opts;
     const entry: Entry = {
       timer: null as unknown as ReturnType<typeof setTimeout>,
       cwd, pid, mechanism, logPath, ws,
       timeoutMs: effectiveTimeout,
+      spawnToken,
     };
     entry.timer = setTimeout(() => this._fireEntry(entry), effectiveTimeout);
+    // Always index by cwd so a `session_register` clears the watchdog even
+    // when the bridge's reported pid differs from the spawner's pid (e.g.
+    // Unix headless wraps pi in `sh -c "tail -f /dev/null | pi …"`, so
+    // spawnResult.pid is the sh wrapper, not pi). Index by pid additionally
+    // for late-recovery lookup. Index by token (when provided) for
+    // strong-identity clearing. See change: spawn-correlation-token.
+    // Replace any prior entry for the same cwd/pid/token to avoid leaking timers.
+    const priorCwd = this.byCwd.get(cwd);
+    if (priorCwd) clearTimeout(priorCwd.timer);
+    this.byCwd.set(cwd, entry);
     if (pid !== undefined) {
+      const priorPid = this.byPid.get(pid);
+      if (priorPid && priorPid !== priorCwd) clearTimeout(priorPid.timer);
       this.byPid.set(pid, entry);
-    } else {
-      this.byCwd.set(cwd, entry);
+    }
+    if (spawnToken) {
+      const priorTok = this.byToken.get(spawnToken);
+      if (priorTok && priorTok !== priorCwd && priorTok !== entry) clearTimeout(priorTok.timer);
+      this.byToken.set(spawnToken, entry);
+    }
+  }
+
+  /**
+   * Strong-identity clear: cancel watchdog for this exact spawn invocation.
+   * Tier 1 of the three-tier match in `event-wiring.ts`. Removes the entry
+   * from all three indices. See change: spawn-correlation-token.
+   */
+  clearByToken(spawnToken: string): void {
+    const entry = this.byToken.get(spawnToken);
+    if (entry) {
+      clearTimeout(entry.timer);
+      this.byToken.delete(spawnToken);
+      const cwdEntry = this.byCwd.get(entry.cwd);
+      if (cwdEntry === entry) this.byCwd.delete(entry.cwd);
+      if (entry.pid !== undefined) {
+        const pidEntry = this.byPid.get(entry.pid);
+        if (pidEntry === entry) this.byPid.delete(entry.pid);
+      }
+      return;
+    }
+    // Check for late recovery: scan recentlyFired for matching token.
+    for (const [cwd, fired] of this.recentlyFired) {
+      if (fired.spawnToken === spawnToken) {
+        this._emitRecovery(cwd, fired);
+        return;
+      }
     }
   }
 
@@ -87,11 +139,12 @@ export class SpawnRegisterWatchdog {
     if (entry) {
       clearTimeout(entry.timer);
       this.byPid.delete(pid);
-      // Also clear cwd entry if it belongs to this pid.
+      // Also clear cwd / token entries if they point at the same arm.
       const cwdEntry = this.byCwd.get(entry.cwd);
-      if (cwdEntry && cwdEntry.pid === pid) {
-        clearTimeout(cwdEntry.timer);
-        this.byCwd.delete(entry.cwd);
+      if (cwdEntry === entry) this.byCwd.delete(entry.cwd);
+      if (entry.spawnToken) {
+        const tokEntry = this.byToken.get(entry.spawnToken);
+        if (tokEntry === entry) this.byToken.delete(entry.spawnToken);
       }
       return;
     }
@@ -104,6 +157,15 @@ export class SpawnRegisterWatchdog {
     if (entry) {
       clearTimeout(entry.timer);
       this.byCwd.delete(cwd);
+      // Also clear pid / token entries if they point at the same arm.
+      if (entry.pid !== undefined) {
+        const pidEntry = this.byPid.get(entry.pid);
+        if (pidEntry === entry) this.byPid.delete(entry.pid);
+      }
+      if (entry.spawnToken) {
+        const tokEntry = this.byToken.get(entry.spawnToken);
+        if (tokEntry === entry) this.byToken.delete(entry.spawnToken);
+      }
       return;
     }
     // Check for late recovery.
@@ -114,15 +176,18 @@ export class SpawnRegisterWatchdog {
     const { cwd, pid, logPath, ws, timeoutMs: entryTimeoutMs } = entry;
     // Remove from active maps.
     if (pid !== undefined) {
-      this.byPid.delete(pid);
-      const cwdEntry = this.byCwd.get(cwd);
-      if (cwdEntry && cwdEntry.pid === pid) this.byCwd.delete(cwd);
-    } else {
-      this.byCwd.delete(cwd);
+      const pidEntry = this.byPid.get(pid);
+      if (pidEntry === entry) this.byPid.delete(pid);
     }
+    const cwdEntry = this.byCwd.get(cwd);
+    if (cwdEntry === entry) this.byCwd.delete(cwd);
 
-    // Record in recentlyFired for late-recovery detection.
-    this.recentlyFired.set(cwd, { firedAt: Date.now(), pid, ws });
+    // Record in recentlyFired for late-recovery detection (also drop token entry).
+    if (entry.spawnToken) {
+      const tokEntry = this.byToken.get(entry.spawnToken);
+      if (tokEntry === entry) this.byToken.delete(entry.spawnToken);
+    }
+    this.recentlyFired.set(cwd, { firedAt: Date.now(), pid, ws, spawnToken: entry.spawnToken });
 
     // Read stderr tail if logPath available.
     let stderrTail: string | undefined;

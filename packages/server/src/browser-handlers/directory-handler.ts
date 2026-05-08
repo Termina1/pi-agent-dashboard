@@ -148,6 +148,10 @@ export function handlePiGatewayForward(
     case "request_models":
       piGateway.sendToSession(msg.sessionId, { type: "request_models", sessionId: msg.sessionId });
       break;
+    case "request_providers":
+      // See change: replace-hardcoded-provider-lists.
+      piGateway.sendToSession(msg.sessionId, { type: "request_providers", sessionId: msg.sessionId });
+      break;
     case "set_thinking_level":
       piGateway.sendToSession(msg.sessionId, { type: "set_thinking_level", sessionId: msg.sessionId, level: msg.level });
       break;

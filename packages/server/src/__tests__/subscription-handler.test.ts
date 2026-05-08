@@ -30,16 +30,18 @@ function createMockContext(overrides: Partial<BrowserHandlerContext> = {}): Brow
 }
 
 describe("handleSubscribe — metadata requests on subscribe", () => {
-  it("sends request_commands, request_models, and request_roles to piGateway", () => {
+  it("sends request_commands, request_models, request_providers, and request_roles to piGateway", () => {
+    // request_providers added by change: replace-hardcoded-provider-lists.
     const ctx = createMockContext();
     const subs = new Set<string>();
     handleSubscribe({ type: "subscribe", sessionId: "s1" }, subs, ctx);
 
     const calls = (ctx.piGateway.sendToSession as any).mock.calls;
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(4);
     expect(calls[0]).toEqual(["s1", { type: "request_commands", sessionId: "s1" }]);
     expect(calls[1]).toEqual(["s1", { type: "request_models", sessionId: "s1" }]);
-    expect(calls[2]).toEqual(["s1", { type: "request_roles", sessionId: "s1" }]);
+    expect(calls[2]).toEqual(["s1", { type: "request_providers", sessionId: "s1" }]);
+    expect(calls[3]).toEqual(["s1", { type: "request_roles", sessionId: "s1" }]);
   });
 });
 
@@ -107,11 +109,33 @@ describe("handleSubscribe — stale lastSeq detection", () => {
     expect(clearReplaying).toHaveBeenCalledWith(ctx.ws, "s1", 5); // lastSent = 5
   });
 
-  it("does not mark replaying for fresh subscribe (lastSeq: 0)", async () => {
+  it("marks replaying for fresh subscribe (lastSeq: 0) when events exist", async () => {
+    // Regression: cold subscribe must suppress live events during paginated
+    // replay. Without suppression, a live `event` arriving between batches
+    // bumps the client's maxSeq past the next batch's firstSeq, triggering
+    // the `firstSeq <= maxSeq` reset rule on the client which wipes state
+    // and rebuilds from only the last batch — leaving the chat showing
+    // only the tail messages.
+    // See change: fix-cold-subscribe-replay-interleave.
     const markReplaying = vi.fn();
-    const ctx = createMockContext({ markReplaying });
+    const clearReplaying = vi.fn();
+    const ctx = createMockContext({ markReplaying, clearReplaying });
     for (let i = 0; i < 3; i++) ctx.eventStore.insertEvent("s1", makeEvent());
 
+    const subs = new Set<string>();
+    handleSubscribe({ type: "subscribe", sessionId: "s1", lastSeq: 0 }, subs, ctx);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(markReplaying).toHaveBeenCalledWith(ctx.ws, "s1");
+    expect(clearReplaying).toHaveBeenCalledWith(ctx.ws, "s1", 3); // lastSent = 3
+  });
+
+  it("does not mark replaying for fresh subscribe when there are no events", async () => {
+    const markReplaying = vi.fn();
+    const ctx = createMockContext({ markReplaying });
+    // No events inserted — hasEvents() returns false; falls through to the
+    // empty-session branch.
     const subs = new Set<string>();
     handleSubscribe({ type: "subscribe", sessionId: "s1", lastSeq: 0 }, subs, ctx);
 

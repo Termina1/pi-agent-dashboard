@@ -23,6 +23,13 @@ export interface HeadlessEntry {
   process: ChildProcess;
   sessionId?: string;
   spawnedAt: number;
+  /**
+   * Server-minted spawn correlation token. Stored at `register` time.
+   * Used by `linkByToken` (tier 1) to resolve sessionId↔pid mapping
+   * deterministically, replacing the racy cwd-FIFO `linkSession`.
+   * See change: spawn-correlation-token.
+   */
+  spawnToken?: string;
 }
 
 /** Serialized format for disk persistence */
@@ -37,9 +44,31 @@ interface PidFileData {
 }
 
 export interface HeadlessPidRegistry {
-  /** Register a newly spawned headless process. */
-  register(pid: number, cwd: string, proc: ChildProcess): void;
-  /** Link a session ID to a tracked PID by matching cwd (FIFO). */
+  /**
+   * Register a newly spawned headless process. The optional `spawnToken`
+   * is the server-minted UUID injected into the spawned process's env;
+   * storing it lets `linkByToken` resolve identity precisely later.
+   * See change: spawn-correlation-token.
+   */
+  register(pid: number, cwd: string, proc: ChildProcess, spawnToken?: string): void;
+  /**
+   * Tier 1 link: find entry by `spawnToken`, set its `sessionId`. Returns
+   * `true` on match. The strongest identity — used when the bridge sent
+   * `session_register.spawnToken`. See change: spawn-correlation-token.
+   */
+  linkByToken(spawnToken: string, sessionId: string, pid?: number): boolean;
+  /**
+   * Tier 2 link: find entry by `pid` (where `!sessionId`), set its
+   * `sessionId`. Returns `true` on match. Used when the bridge sent
+   * `session_register.pid` but no token. See change: spawn-correlation-token.
+   */
+  linkByPid(sessionId: string, pid: number): boolean;
+  /**
+   * Tier 3 (legacy) link: find first entry by `cwd` where `!sessionId`,
+   * set its `sessionId`. Returns `true` on match. Cwd-FIFO fallback for
+   * old bridges that send neither token nor pid. Race-prone for
+   * concurrent same-cwd spawns; tiers 1–2 should pre-empt this.
+   */
   linkSession(sessionId: string, cwd: string): boolean;
   /** Get the PID linked to a session ID. */
   getPid(sessionId: string): number | undefined;
@@ -84,13 +113,33 @@ export function createHeadlessPidRegistry(options?: HeadlessPidRegistryOptions):
   }
 
   return {
-    register(pid: number, cwd: string, proc: ChildProcess) {
-      entries.set(pid, { pid, cwd, process: proc, spawnedAt: Date.now() });
+    register(pid: number, cwd: string, proc: ChildProcess, spawnToken?: string) {
+      entries.set(pid, { pid, cwd, process: proc, spawnedAt: Date.now(), spawnToken });
       proc.on("exit", () => {
         entries.delete(pid);
         persist();
       });
       persist();
+    },
+
+    linkByToken(spawnToken: string, sessionId: string, _pid?: number): boolean {
+      if (!spawnToken) return false;
+      for (const entry of entries.values()) {
+        if (entry.spawnToken === spawnToken && !entry.sessionId) {
+          entry.sessionId = sessionId;
+          return true;
+        }
+      }
+      return false;
+    },
+
+    linkByPid(sessionId: string, pid: number): boolean {
+      const entry = entries.get(pid);
+      if (entry && !entry.sessionId) {
+        entry.sessionId = sessionId;
+        return true;
+      }
+      return false;
     },
 
     linkSession(sessionId: string, cwd: string): boolean {

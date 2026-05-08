@@ -1,6 +1,7 @@
 /**
  * Session action handlers: send_prompt, abort, resume, spawn, shutdown, flow_control.
  */
+import { existsSync } from "node:fs";
 import type { BrowserToServerMessage } from "@blackbelt-technology/pi-dashboard-shared/browser-protocol.js";
 import type { BrowserHandlerContext } from "./handler-context.js";
 import { spawnPiSession } from "../process-manager.js";
@@ -18,6 +19,19 @@ import {
   findPidByMarker,
 } from "@blackbelt-technology/pi-dashboard-shared/platform/process-identify.js";
 import { shouldInterceptReload } from "./session-action-helpers.js";
+
+/**
+ * Status message + code emitted when fork is attempted on a session whose
+ * `.jsonl` does not exist on disk yet (empty session, no persisted entries).
+ * The dashboard silently degrades to a fresh spawn in the same cwd — fork
+ * has no history to copy, so the user-meaningful semantic of "fork" and
+ * "new" is identical here. The structured code lets the client surface a
+ * non-blocking toast.
+ * See change: fix-fork-empty-session-silent-timeout.
+ */
+export const FORK_DEGRADED_TO_NEW_MESSAGE =
+  "Started a fresh session \u2014 the source had no persisted history to fork from.";
+export const FORK_DEGRADED_TO_NEW_CODE = "FORK_DEGRADED_TO_NEW";
 
 /**
  * Find headless pi PIDs associated with a session-id marker and kill them.
@@ -240,10 +254,10 @@ export async function handleResumeSession(
   msg: Extract<BrowserToServerMessage, { type: "resume_session" }>,
   ctx: BrowserHandlerContext,
 ): Promise<void> {
-  const { ws, sessionManager, pendingForkRegistry, headlessPidRegistry, pendingDashboardSpawns, pendingResumeIntents, sendTo } = ctx;
+  const { ws, sessionManager, pendingForkRegistry, headlessPidRegistry, pendingDashboardSpawns, pendingResumeIntents, pendingClientCorrelations, sendTo } = ctx;
   const session = sessionManager.get(msg.sessionId);
   if (!session) {
-    sendTo(ws, { type: "resume_result", sessionId: msg.sessionId, success: false, message: "Session not found" });
+    sendTo(ws, { type: "resume_result", sessionId: msg.sessionId, success: false, message: "Session not found", requestId: msg.requestId });
     return;
   }
   // Resolve placement intent. Old browsers omit the field; default to
@@ -252,28 +266,71 @@ export async function handleResumeSession(
   // See change: differentiate-resume-intent-by-trigger.
   const placement: "front" | "keep" = msg.placement ?? "front";
   if (!session.sessionFile) {
-    sendTo(ws, { type: "resume_result", sessionId: msg.sessionId, success: false, message: "Session file is unknown (pre-migration session)" });
+    sendTo(ws, { type: "resume_result", sessionId: msg.sessionId, success: false, message: "Session file is unknown (pre-migration session)", requestId: msg.requestId });
     return;
   }
   if (msg.mode === "continue" && session.status !== "ended") {
-    sendTo(ws, { type: "resume_result", sessionId: msg.sessionId, success: false, message: "Session is already active" });
+    sendTo(ws, { type: "resume_result", sessionId: msg.sessionId, success: false, message: "Session is already active", requestId: msg.requestId });
     return;
   }
   if (session.resuming) {
-    sendTo(ws, { type: "resume_result", sessionId: msg.sessionId, success: false, message: "Session is already being resumed" });
+    sendTo(ws, { type: "resume_result", sessionId: msg.sessionId, success: false, message: "Session is already being resumed", requestId: msg.requestId });
     return;
   }
-  if (msg.mode === "fork" && pendingForkRegistry) {
-    pendingForkRegistry.recordFork(session.cwd, msg.sessionId);
+  // Fork preflight: silent-degrade when the source session has no on-disk
+  // JSONL yet (empty session, no persisted entries). `pi --fork <missing>`
+  // would crash silently and produce a 30s register-timeout; instead we
+  // spawn a fresh pi in the same cwd and surface `code: FORK_DEGRADED_TO_NEW`
+  // so the client can render a non-blocking toast. The parent's
+  // attachedProposal (if any) is inherited via `pendingAttachRegistry`
+  // since fork's own inheritance path doesn't run on this branch.
+  // See change: fix-fork-empty-session-silent-timeout.
+  if (msg.mode === "fork" && session.sessionFile && !existsSync(session.sessionFile)) {
+    // Inherit attachedProposal from parent so the new session still
+    // tracks the change the user was working on.
+    const pendingAttachRegistry = ctx.pendingAttachRegistry;
+    if (session.attachedProposal && pendingAttachRegistry) {
+      pendingAttachRegistry.enqueue(session.cwd, session.attachedProposal);
+    }
+    const degradeConfig = loadConfig();
+    // Fresh spawn: no sessionFile, no mode — just `pi --mode rpc`.
+    const degradeResult = await spawnPiSession(session.cwd, {
+      strategy: degradeConfig.spawnStrategy,
+    });
+    if (degradeResult.process && degradeResult.pid) {
+      headlessPidRegistry.register(
+        degradeResult.pid,
+        session.cwd,
+        degradeResult.process,
+        degradeResult.spawnToken,
+      );
+    }
+    if (msg.requestId && degradeResult.spawnToken && pendingClientCorrelations) {
+      pendingClientCorrelations.record(degradeResult.spawnToken, msg.requestId);
+    }
+    if (degradeResult.dashboardSpawned && degradeResult.success) {
+      pendingDashboardSpawns?.set(
+        session.cwd,
+        (pendingDashboardSpawns?.get(session.cwd) ?? 0) + 1,
+      );
+    }
+    sendTo(ws, {
+      type: "resume_result",
+      sessionId: msg.sessionId,
+      success: degradeResult.success,
+      message: degradeResult.success ? FORK_DEGRADED_TO_NEW_MESSAGE : degradeResult.message,
+      requestId: msg.requestId,
+      ...(degradeResult.success ? { code: FORK_DEGRADED_TO_NEW_CODE } : {}),
+    });
+    return;
   }
-
   // For fork-from-message: create a pruned session file first
   let forkSessionFile = session.sessionFile;
   if (msg.mode === "fork" && msg.entryId) {
     try {
       forkSessionFile = createBranchedSessionFile(session.sessionFile, msg.entryId);
     } catch (err: any) {
-      sendTo(ws, { type: "resume_result", sessionId: msg.sessionId, success: false, message: `Fork from entry failed: ${err.message}` });
+      sendTo(ws, { type: "resume_result", sessionId: msg.sessionId, success: false, message: `Fork from entry failed: ${err.message}`, requestId: msg.requestId });
       return;
     }
   }
@@ -293,26 +350,39 @@ export async function handleResumeSession(
     mode: msg.mode,
     strategy: resumeConfig.spawnStrategy,
   });
+  // Record fork parent keyed by spawn token (was: keyed by cwd, racy on
+  // multi-fork-in-same-cwd). See change: spawn-correlation-token.
+  if (msg.mode === "fork" && pendingForkRegistry && result.spawnToken) {
+    pendingForkRegistry.recordFork(result.spawnToken, msg.sessionId);
+  }
+  // Record client-correlation so the eventual session_added carries
+  // spawnRequestId. See change: spawn-correlation-token.
+  if (msg.requestId && result.spawnToken && pendingClientCorrelations) {
+    pendingClientCorrelations.record(result.spawnToken, msg.requestId);
+  }
   if (result.dashboardSpawned && result.success) {
     pendingDashboardSpawns?.set(session.cwd, (pendingDashboardSpawns?.get(session.cwd) ?? 0) + 1);
   }
   if (result.process && result.pid) {
-    headlessPidRegistry.register(result.pid, session.cwd, result.process);
+    headlessPidRegistry.register(result.pid, session.cwd, result.process, result.spawnToken);
   }
-  sendTo(ws, { type: "resume_result", sessionId: msg.sessionId, success: result.success, message: result.message });
+  sendTo(ws, { type: "resume_result", sessionId: msg.sessionId, success: result.success, message: result.message, requestId: msg.requestId });
 }
 
 export async function handleSpawnSession(
   msg: Extract<BrowserToServerMessage, { type: "spawn_session" }>,
   ctx: BrowserHandlerContext,
 ): Promise<void> {
-  const { ws, headlessPidRegistry, pendingDashboardSpawns, pendingAttachRegistry, sendTo } = ctx;
+  const { ws, headlessPidRegistry, pendingDashboardSpawns, pendingAttachRegistry, pendingClientCorrelations, sendTo } = ctx;
   const config = loadConfig();
   const strategy = config.spawnStrategy ?? "tmux";
 
   // Queue the optional attach intent BEFORE awaiting the spawn so a fast
   // bridge `session_register` cannot lose the intent. See change:
-  // add-folder-task-checker-and-spawn-attach.
+  // add-folder-task-checker-and-spawn-attach. NOTE: at this point we don't
+  // yet have a spawnToken (spawn hasn't run); we enqueue by cwd-FIFO and
+  // re-record by token after spawnPiSession returns. See change:
+  // spawn-correlation-token.
   if (typeof msg.attachProposal === "string" && msg.attachProposal.length > 0) {
     pendingAttachRegistry?.enqueue(msg.cwd, msg.attachProposal);
   }
@@ -322,7 +392,7 @@ export async function handleSpawnSession(
   const preflight = preflightSpawn(msg.cwd, { resolver: preflightResolver });
   if (!preflight.ok) {
     const message = preflight.reasons.map((r) => r.message).join("; ");
-    sendTo(ws, { type: "spawn_result", cwd: msg.cwd, success: false, message });
+    sendTo(ws, { type: "spawn_result", cwd: msg.cwd, success: false, message, requestId: msg.requestId });
     sendTo(ws, { type: "spawn_error", cwd: msg.cwd, strategy, message, code: "PREFLIGHT_FAILED", reasons: preflight.reasons });
     appendSpawnFailure({
       ts: new Date().toISOString(),
@@ -342,12 +412,24 @@ export async function handleSpawnSession(
   try {
     const spawnResult = await spawnPiSession(msg.cwd, { strategy });
     if (spawnResult.process && spawnResult.pid) {
-      headlessPidRegistry.register(spawnResult.pid, msg.cwd, spawnResult.process);
+      headlessPidRegistry.register(spawnResult.pid, msg.cwd, spawnResult.process, spawnResult.spawnToken);
+    }
+    // Record client-correlation so the eventual session_added carries
+    // spawnRequestId. See change: spawn-correlation-token.
+    if (msg.requestId && spawnResult.spawnToken && pendingClientCorrelations) {
+      pendingClientCorrelations.record(spawnResult.spawnToken, msg.requestId);
     }
     if (spawnResult.dashboardSpawned && spawnResult.success) {
       pendingDashboardSpawns?.set(msg.cwd, (pendingDashboardSpawns?.get(msg.cwd) ?? 0) + 1);
     }
-    sendTo(ws, { type: "spawn_result", cwd: msg.cwd, success: spawnResult.success, message: spawnResult.message });
+    sendTo(ws, {
+      type: "spawn_result",
+      cwd: msg.cwd,
+      success: spawnResult.success,
+      message: spawnResult.message,
+      requestId: msg.requestId,
+      ...(spawnResult.pid ? { pid: spawnResult.pid } : {}),
+    });
     if (!spawnResult.success) {
       sendTo(ws, {
         type: "spawn_error",
@@ -377,12 +459,13 @@ export async function handleSpawnSession(
         // on the next spawn without a server restart. See change: spawn-failure-diagnostics (fix W1).
         timeoutMs: config.spawnRegisterTimeoutMs,
         ws,
+        spawnToken: spawnResult.spawnToken,
       });
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const stderr = err instanceof Error && "stderr" in err ? String((err as { stderr: unknown }).stderr).slice(-2048) : undefined;
-    sendTo(ws, { type: "spawn_result", cwd: msg.cwd, success: false, message });
+    sendTo(ws, { type: "spawn_result", cwd: msg.cwd, success: false, message, requestId: msg.requestId });
     sendTo(ws, { type: "spawn_error", cwd: msg.cwd, strategy, message, code: "SPAWN_ERRNO", stderr });
     appendSpawnFailure({
       ts: new Date().toISOString(),

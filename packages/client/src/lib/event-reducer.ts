@@ -5,6 +5,7 @@
 import type { DashboardEvent, FlowState, ArchitectState } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 import { isFlowEvent, reduceFlowEvent } from "@blackbelt-technology/pi-dashboard-flows-plugin/reducer";
 import { isArchitectEvent, reduceArchitectEvent } from "@blackbelt-technology/pi-dashboard-flows-plugin/reducer";
+import { parseSkillBlock, type SkillBlock } from "@blackbelt-technology/pi-dashboard-shared/skill-block-parser.js";
 
 export interface ChatImage {
   data: string;
@@ -40,6 +41,15 @@ export interface ChatMessage {
    * `entryId` once persistence completes. See change: fix-per-message-fork.
    */
   nonce?: string;
+  /**
+   * Parsed skill-invocation metadata for user messages whose persisted
+   * content matches the `<skill name=...>...</skill>\n\nargs` envelope (pi's
+   * `_expandSkillCommand` output, also produced by the dashboard bridge).
+   * `content` is preserved as the raw expanded string for copy semantics;
+   * the renderer uses `skill` to produce a collapsible card.
+   * See change: render-skill-invocations-collapsibly.
+   */
+  skill?: SkillBlock;
 }
 
 export interface ToolCallState {
@@ -119,6 +129,19 @@ export interface SessionState {
   turnCount: number;
   /** Last LLM provider error (set from agent_end, cleared on agent_start or dismiss) */
   lastError?: { message: string; timestamp: number };
+  /**
+   * In-flight LLM-provider auto-retry state. Set on `auto_retry_start`,
+   * cleared on `auto_retry_end` / `agent_start` / `agent_end`. Drives the
+   * RetryBanner UI and the session-card amber dot.
+   * See change: fix-provider-retry-infinite-loop.
+   */
+  retryState?: {
+    attempt: number;
+    maxAttempts: number;
+    delayMs: number;
+    reason: string;
+    startedAt: number;
+  };
   /**
    * True iff the current assistant message has already had its streaming
    * text flushed into messages[] via flushStreamingTextAsAssistantRow.
@@ -632,6 +655,35 @@ export function dismissInteractiveRequest(
   };
 }
 
+/**
+ * Find the most recent `user`-role ChatMessage and return its content + images
+ * mapped to the wire-format `ImageContent[]` shape (adds `type: "image"`).
+ *
+ * Used by the Retry-after-error button to re-send the failed turn via
+ * `send_prompt` (which routes to `pi.sendUserMessage` in the bridge). Skips
+ * non-user roles like `interactiveUi`, so an `ask_user` response cannot be
+ * mistaken for a prompt.
+ *
+ * Returns `null` when no user message exists in history.
+ *
+ * See change: fix-retry-resends-last-user-message.
+ */
+export function findLastUserPrompt(
+  messages: readonly ChatMessage[],
+): { text: string; images?: { type: "image"; data: string; mimeType: string }[] } | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role !== "user") continue;
+    const images = m.images?.map((img) => ({
+      type: "image" as const,
+      data: img.data,
+      mimeType: img.mimeType,
+    }));
+    return { text: m.content, ...(images && images.length > 0 ? { images } : {}) };
+  }
+  return null;
+}
+
 /** Extract error info from agent_end event's messages array. */
 export function extractAgentEndError(data: Record<string, unknown>): string | undefined {
   const messages = data.messages;
@@ -652,6 +704,7 @@ export function reduceEvent(state: SessionState, event: DashboardEvent): Session
       next.streamingText = "";
       next.pendingPrompt = undefined;
       next.lastError = undefined;
+      next.retryState = undefined;
       break;
 
     case "agent_end": {
@@ -663,6 +716,29 @@ export function reduceEvent(state: SessionState, event: DashboardEvent): Session
       const errorMsg = extractAgentEndError(data);
       if (errorMsg) {
         next.lastError = { message: errorMsg, timestamp: event.timestamp };
+      }
+      next.retryState = undefined;
+      break;
+    }
+
+    case "auto_retry_start": {
+      const attempt = typeof data.attempt === "number" ? data.attempt : 1;
+      const maxAttempts = typeof data.maxAttempts === "number" ? data.maxAttempts : 1;
+      const delayMs = typeof data.delayMs === "number" ? data.delayMs : 0;
+      const reason = typeof data.errorMessage === "string" ? data.errorMessage : "Provider error";
+      next.retryState = { attempt, maxAttempts, delayMs, reason, startedAt: event.timestamp };
+      break;
+    }
+
+    case "auto_retry_end": {
+      // No-op if no retry was tracked (covers stale events / multi-call turns).
+      if (!state.retryState) {
+        break;
+      }
+      next.retryState = undefined;
+      // Surface terminal error early when no other lastError has fired yet.
+      if (data.success === false && typeof data.finalError === "string" && !state.lastError) {
+        next.lastError = { message: data.finalError, timestamp: event.timestamp };
       }
       break;
     }
@@ -695,12 +771,17 @@ export function reduceEvent(state: SessionState, event: DashboardEvent): Session
         } else {
           text = String(msg.content ?? "");
         }
+        // Detect a wrapped <skill>...</skill> envelope so the renderer can show
+        // a collapsible card and ArrowUp recall can return the slash form.
+        // See change: render-skill-invocations-collapsibly.
+        const skill = parseSkillBlock(text) ?? undefined;
         next.messages = [
           ...next.messages,
           {
             id: `msg-${next.messages.length}`,
             role: "user",
             content: text,
+            ...(skill ? { skill } : {}),
             images,
             timestamp: event.timestamp,
             // entryId from data.entryId is correct ONLY for replayed events

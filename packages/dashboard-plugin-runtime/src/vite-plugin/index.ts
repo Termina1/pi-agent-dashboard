@@ -70,7 +70,7 @@ function buildClientImportSpecifier(entry: PluginEntry, repoRoot: string): strin
   const generatedPath = getGeneratedPath(repoRoot);
   const fromDir = path.dirname(generatedPath);
   const rel = path.relative(fromDir, entry.clientEntryPath!);
-  const normalized = normalizeImportPath(rel);
+  const normalized = normalizeImportPath(rel).replace(/\.(tsx?|jsx?)$/, "");
   return normalized.startsWith(".") ? normalized : `./${normalized}`;
 }
 

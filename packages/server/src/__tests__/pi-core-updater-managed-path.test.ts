@@ -90,8 +90,11 @@ describe("defaultRunNpmUpdate — registry resolution + managed PATH", () => {
 		expect(capturedCmd).toBe("C:\\node\\node.exe");
 		expect(capturedArgs.slice(0, 2)).toEqual([
 			"C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
-			"update",
+			"install",
 		]);
+		// Anchor the @latest suffix — the regression guard for
+		// fix-pi-core-update-cross-minor.
+		expect(capturedArgs).toContain("@mariozechner/pi-coding-agent@latest");
 	});
 
 	it("rejects with a clear 'npm' error when registry can't resolve", async () => {
@@ -152,7 +155,63 @@ describe("defaultRunNpmUpdate — registry resolution + managed PATH", () => {
 					_envBuilder: () => ({}),
 				},
 			),
-		).rejects.toThrow(/sudo npm update -g @example\/pkg/);
+		).rejects.toThrow(/sudo npm install -g @example\/pkg@latest/);
+	});
+
+	it("spawns npm install with @latest suffix for managed install (regression guard)", async () => {
+		// fix-pi-core-update-cross-minor: managed updates must not run
+		// `npm update` (which respects the consuming package.json range)
+		// — they must run `npm install <pkg>@latest`.
+		let capturedArgs: readonly string[] = [];
+		const spawnFn = makeFakeSpawn({
+			exitCode: 0,
+			captureSpawn: (_c, args) => {
+				capturedArgs = args;
+			},
+		});
+		// Pre-create the managed dir so the existence check passes.
+		const managedDir = path.join(os.homedir(), ".pi-dashboard");
+		fs.mkdirSync(managedDir, { recursive: true });
+
+		await defaultRunNpmUpdate(
+			makePkg({ name: "@mariozechner/pi-coding-agent", installSource: "managed" }),
+			() => {},
+			{
+				_resolveNpm: () => ({ ok: true, argv: ["/usr/bin/npm"] }),
+				_spawn: spawnFn,
+				_envBuilder: () => ({}),
+			},
+		);
+
+		expect(capturedArgs[0]).toBe("install");
+		// NOT "-g" for managed installs.
+		expect(capturedArgs).not.toContain("-g");
+		// The hot bit: @latest suffix.
+		expect(capturedArgs.some((a) => a === "@mariozechner/pi-coding-agent@latest")).toBe(true);
+	});
+
+	it("spawns npm install -g with @latest suffix for global install (regression guard)", async () => {
+		let capturedArgs: readonly string[] = [];
+		const spawnFn = makeFakeSpawn({
+			exitCode: 0,
+			captureSpawn: (_c, args) => {
+				capturedArgs = args;
+			},
+		});
+
+		await defaultRunNpmUpdate(
+			makePkg({ name: "@mariozechner/pi-coding-agent", installSource: "global" }),
+			() => {},
+			{
+				_resolveNpm: () => ({ ok: true, argv: ["/usr/bin/npm"] }),
+				_spawn: spawnFn,
+				_envBuilder: () => ({}),
+			},
+		);
+
+		expect(capturedArgs[0]).toBe("install");
+		expect(capturedArgs).toContain("-g");
+		expect(capturedArgs.some((a) => a.endsWith("@latest"))).toBe(true);
 	});
 
 	it("rejects up front when managed install dir does not exist", async () => {

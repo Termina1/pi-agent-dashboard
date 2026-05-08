@@ -182,6 +182,27 @@ Cross-refs:
 - README.md:470
 - docs/architecture.md:13
 
+## How do I retry the dashboard server launch from the Electron app?
+
+Initial `ensureServer()` attempts run during Electron startup. Failure shows loading page with "Cannot connect to dashboard server".
+
+Loading page exposes:
+- **"Start server" button** → calls `requestServerLaunch()` via `dashboard:request-launch` IPC.
+- **"Open Doctor" link** → `dashboard:open-doctor` IPC.
+- Collapsible **"Server log" panel** → last 20 lines of `~/.pi/dashboard/server.log` via `dashboard:read-server-log`.
+
+System tray menu shows **"Start server"** when no server running, **"Restart server"** when running. Polls every 3s.
+
+All entry points share idempotent `requestServerLaunch()` in `packages/electron/src/lib/server-lifecycle.ts`. Concurrent calls share one inflight spawn attempt.
+
+`force: true` POSTs `/api/shutdown`, waits up to 5s for port to close, spawns fresh.
+
+Failures returned as `{ kind: "failed", reason, logTail }` value, never thrown.
+
+Cross-refs:
+- README.md:268
+- packages/electron/src/lib/server-lifecycle.ts
+
 ## How do I configure the dashboard?
 
 Edit `~/.pi/dashboard/config.json` or click gear icon in sidebar header.
@@ -408,6 +429,9 @@ Cross-refs:
 - README.md:507
 
 ## How do I build the Electron app?
+
+See full comparison of all three build methods: `docs/electron-build-methods.md`.
+
 
 Single command for current platform.
 
@@ -1039,6 +1063,12 @@ Error case: Shows full diagnostic trail + suggests fixes (reinstall, run setup, 
 Cross-refs:
 - docs/electron-session.md:312
 - packages/electron/src/lib/doctor.ts
+
+---
+
+## Why does my server.log stay 0 bytes after a clean Electron launch?
+
+Pre-fix bug. `spawnDetached` only routed stderr to `logFd`; stdout (where server's startup banner went) discarded. `server.log` file existed but stayed empty. Fixed in change `fix-electron-extracted-jiti-and-stdio-capture`. Pre-fix workaround: read Electron-side log at `$env:TEMP\pi-dashboard-electron.log` (Windows) or `$TMPDIR/pi-dashboard-electron.log` (macOS/Linux).
 
 ---
 

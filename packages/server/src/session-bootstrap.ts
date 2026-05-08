@@ -4,7 +4,7 @@
  */
 import type { SessionManager } from "./memory-session-manager.js";
 import type { BrowserGateway } from "./browser-gateway.js";
-import type { DirectoryService } from "./directory-service.js";
+import { isOpenSpecDataEmpty, type DirectoryService } from "./directory-service.js";
 import { extractSessionStats } from "./session-stats-reader.js";
 
 export interface SessionBootstrapDeps {
@@ -75,20 +75,35 @@ export async function discoverAndBroadcastSessions(deps: SessionBootstrapDeps): 
 
   // Initial OpenSpec poll for all known directories.
   //
-  // NOTE: `refreshOpenSpec` / `pollOpenSpec` is currently synchronous internally
-  // (spawnSync per change) — on Windows with many active changes (~19) and
-  // multiple pinned directories this can block the event loop for minutes,
-  // making the HTTP server unresponsive during startup. We intentionally do
-  // NOT await it here so HTTP + WebSocket startup completes immediately;
-  // openspec data populates in the background and pushes `openspec_update`
-  // broadcasts to browsers as each directory finishes.
+  // Fire-and-forget: `refreshOpenSpec` / `pollOpenSpec` is synchronous internally
+  // (spawnSync per change) — on Windows with many active changes and multiple
+  // pinned directories this can block the event loop for minutes, making the
+  // HTTP server unresponsive during startup. We intentionally do NOT await it
+  // here so HTTP + WebSocket startup completes immediately.
   //
-  // A proper fix is to migrate the openspec Recipe to async spawn; tracked
-  // separately. See change: consolidate-tool-resolution.
+  // After each directory's poll completes, broadcast `openspec_update` to all
+  // connected browsers if the prior cache was empty/undefined or the polled
+  // data differs from prior — mirroring the proven `runPostInstallRepair`
+  // pattern in `server.ts`. This is what unblocks cold-boot Electron clients
+  // that connected before the cache was hot.
+  //
+  // A proper fix for the slow `spawnSync` path is to migrate the openspec
+  // Recipe to async spawn; tracked separately. See change:
+  // consolidate-tool-resolution. This change covers the broadcast wiring only.
+  // See change: fix-cold-boot-openspec-protocol.
   void Promise.all(
     directoryService.knownDirectories().map(async (cwd) => {
-      try { await directoryService.refreshOpenSpec(cwd); }
-      catch (err) { console.error(`[dashboard] initial openspec poll failed for ${cwd}:`, err); }
+      try {
+        const prior = directoryService.getOpenSpecData(cwd);
+        const fresh = await directoryService.refreshOpenSpec(cwd);
+        const priorEmpty = isOpenSpecDataEmpty(prior);
+        const dataDiffers = JSON.stringify(prior) !== JSON.stringify(fresh);
+        if (priorEmpty || dataDiffers) {
+          browserGateway.broadcastToAll({ type: "openspec_update", cwd, data: fresh });
+        }
+      } catch (err) {
+        console.error(`[dashboard] initial openspec poll failed for ${cwd}:`, err);
+      }
     }),
   );
 }

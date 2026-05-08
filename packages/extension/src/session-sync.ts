@@ -8,6 +8,7 @@ import { detectSessionSource } from "./source-detector.js";
 import { replayEntriesAsEvents } from "@blackbelt-technology/pi-dashboard-shared/state-replay.js";
 import { gatherGitInfo, gatherJjInfo } from "./vcs-info.js";
 import type { FlowInfo } from "@blackbelt-technology/pi-dashboard-shared/types.js";
+import { buildProviderCatalogue } from "./provider-register.js";
 
 /**
  * Send full state sync to the server (session_register, commands, flows, models).
@@ -38,7 +39,15 @@ export function sendStateSync(
   // dashboard restart) is a "reattach". Server applies the configured
   // `reattachPlacement` policy on "reattach".
   // See change: reattach-move-to-front.
-  const registerReason: "spawn" | "reattach" = bc.hasRegisteredOnce ? "reattach" : "spawn";
+  const isFirstRegister = !bc.hasRegisteredOnce;
+  const registerReason: "spawn" | "reattach" = isFirstRegister ? "spawn" : "reattach";
+
+  // Include the spawn correlation token (server-minted UUID injected via
+  // env var at spawn time) ONLY on the first register. Subsequent
+  // registers (reattach after dashboard restart, in-process Ctrl+F fork)
+  // omit it because the sessionId is already known to the server.
+  // See change: spawn-correlation-token (Decision 3).
+  const spawnToken = isFirstRegister ? process.env.PI_DASHBOARD_SPAWN_TOKEN : undefined;
 
   bc.connection.send({
     type: "session_register",
@@ -54,6 +63,7 @@ export function sendStateSync(
     eventCount,
     pid: process.pid,
     registerReason,
+    ...(spawnToken ? { spawnToken } : {}),
   });
 
   bc.hasRegisteredOnce = true;
@@ -72,6 +82,8 @@ export function sendStateSync(
         id: m.id,
       }));
       bc.connection.send({ type: "models_list", sessionId: bc.sessionId, models });
+      // See change: replace-hardcoded-provider-lists.
+      bc.connection.send({ type: "providers_list", sessionId: bc.sessionId, providers: buildProviderCatalogue() });
     } catch { /* ignore */ }
   }
 }
@@ -164,6 +176,8 @@ export function handleSessionChange(
         id: m.id,
       }));
       bc.connection.send({ type: "models_list", sessionId: bc.sessionId, models });
+      // See change: replace-hardcoded-provider-lists.
+      bc.connection.send({ type: "providers_list", sessionId: bc.sessionId, providers: buildProviderCatalogue() });
     } catch { /* ignore */ }
   }
 }

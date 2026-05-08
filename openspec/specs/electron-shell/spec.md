@@ -1,27 +1,42 @@
 ## ADDED Requirements
 
 ### Requirement: Electron main process lifecycle
-The Electron main process SHALL discover or launch a dashboard server, then open a BrowserWindow pointing at the server URL. The server SHALL always run as a separate detached process, never in-process.
+
+The Electron main process SHALL discover or launch a dashboard server, then open a BrowserWindow pointing at the server URL. The server SHALL always run as a separate detached process, never in-process. On `ensureServer()` failure the main process SHALL classify the error and route to either the configuration-error dialog or the interactive loading page — it SHALL NOT retry `ensureServer()` a second time, because a second 15 s budget produces no useful signal that the loading page (which polls indefinitely) does not already provide.
 
 #### Scenario: Launch with no server running
+
 - **WHEN** the Electron app starts and no dashboard server is discovered (mDNS via `@blackbelt-technology/pi-dashboard-shared/mdns-discovery` + health check fallback via `@blackbelt-technology/pi-dashboard-shared/server-identity`)
 - **THEN** it SHALL launch the server as a detached process using the `tsx` binary and open a BrowserWindow pointing at `http://localhost:<port>` once the server is ready
 
 #### Scenario: Launch with server already running
+
 - **WHEN** the Electron app starts and a localhost dashboard server is discovered
 - **THEN** it SHALL skip server launch and open a BrowserWindow pointing at the discovered server URL
 
 #### Scenario: Window close behavior
+
 - **WHEN** the user closes the Electron window
 - **THEN** the app SHALL minimize to the system tray (server keeps running)
 
-#### Scenario: Server launch failure with retry
-- **WHEN** the server fails to start
-- **THEN** the app SHALL show an error dialog with the failure reason and offer "Run Setup", "Retry", or "Quit" options
-- **AND** if all retry attempts fail, it SHALL show a loading page that keeps polling and displays connection instructions
+#### Scenario: Configuration-error failure shows error dialog
+
+- **GIVEN** `ensureServer()` throws an error that does NOT begin with "Server did not respond within" or "Server child process exited prematurely" (e.g. "No TypeScript loader found", "Dashboard server CLI not found", "Port N is in use by another service")
+- **WHEN** the main process catches the error
+- **THEN** it SHALL close the splash and show an error dialog with the failure reason and offer "Run Setup", "Retry", or "Quit" options
+- **AND** it SHALL NOT issue a second `ensureServer()` attempt before showing the dialog
+
+#### Scenario: Deadline / child-exit failure falls through to loading page
+
+- **GIVEN** `ensureServer()` throws an error whose message begins with "Server did not respond within" OR "Server child process exited prematurely"
+- **WHEN** the main process catches the error
+- **THEN** it SHALL close the splash, open the BrowserWindow at `http://localhost:<port>`, and call `showLoadingPage(win, serverUrl)`
+- **AND** it SHALL NOT show the error dialog
+- **AND** it SHALL NOT issue a second `ensureServer()` attempt
+- **AND** the loading page SHALL keep polling `/api/health` every 1.5 s, surfacing Start server / Open Doctor / server-log controls after ~15 s as already specified
 
 ### Requirement: Loading page with connection retry
-The app SHALL show a branded loading page while waiting for the server to become available.
+The app SHALL show a branded loading page while waiting for the server to become available. The loading page SHALL provide user-initiated controls to launch the server, open Doctor, and view recent server log output once an initial timeout has elapsed.
 
 #### Scenario: Loading page displays
 - **WHEN** the BrowserWindow opens before the server is ready
@@ -31,6 +46,36 @@ The app SHALL show a branded loading page while waiting for the server to become
 - **WHEN** the server is not available after ~15 seconds
 - **THEN** the loading page SHALL show connection error details with installation instructions
 - **AND** it SHALL continue retrying in the background and auto-redirect when the server becomes available
+
+#### Scenario: Loading page exposes Start server action after timeout
+- **WHEN** the loading page has shown the error state
+- **THEN** it SHALL display a primary "Start server" button
+- **AND** clicking the button SHALL invoke the main-process `requestServerLaunch()` routine via the `dashboard:request-launch` IPC channel
+- **AND** while the launch is in progress, the button SHALL be disabled and the status text SHALL show "Launching server…"
+
+#### Scenario: Loading page reports launch outcome
+- **WHEN** `requestServerLaunch()` returns `{ kind: "started" }` or `{ kind: "already-running" }`
+- **THEN** the loading page SHALL navigate the BrowserWindow to the server URL within one polling cycle
+- **WHEN** `requestServerLaunch()` returns `{ kind: "failed", reason }`
+- **THEN** the loading page SHALL re-enable the "Start server" button and display the `reason` string in the status area
+- **AND** background polling of `/api/health` SHALL continue so an out-of-band start (e.g. `pi` session, manual `pi-dashboard start`) still auto-redirects
+
+#### Scenario: Loading page exposes Open Doctor action
+- **WHEN** the loading page has shown the error state
+- **THEN** it SHALL display an "Open Doctor" link
+- **AND** clicking the link SHALL send the `dashboard:open-doctor` IPC message which opens the existing Doctor diagnostic window
+
+#### Scenario: Loading page surfaces server log tail
+- **WHEN** the loading page has shown the error state
+- **AND** `~/.pi/dashboard/server.log` exists and is non-empty
+- **THEN** the loading page SHALL show a collapsible "Server log" panel containing the last 20 lines of the log
+- **WHEN** the log file does not exist or cannot be read
+- **THEN** the panel SHALL be hidden — its absence SHALL NOT block any other loading-page behaviour
+
+#### Scenario: Loading page is loaded from a packaged HTML resource
+- **WHEN** the BrowserWindow shows the loading page
+- **THEN** it SHALL be loaded via `loadFile('resources/loading.html')` (not a `data:` URL)
+- **AND** a preload script SHALL expose only `requestLaunch`, `openDoctor`, `readServerLog`, and `onStatus` on `window.piDashboard` via `contextBridge`
 
 ### Requirement: Single-instance lock
 The Electron app SHALL use `app.requestSingleInstanceLock()` to prevent multiple Electron windows from running simultaneously.
@@ -48,11 +93,11 @@ The BrowserWindow SHALL load the dashboard server URL with appropriate settings 
 - **AND** it SHALL persist window size and position across restarts
 
 ### Requirement: System tray integration
-The app SHALL show a system tray icon with a context menu when the window is closed. The tray SHALL use a platform-appropriate icon image.
+The app SHALL show a system tray icon with a context menu when the window is closed. The tray SHALL use a platform-appropriate icon image. The tray context menu SHALL expose a server-launch action whose label and behaviour reflect current server state.
 
 #### Scenario: Tray icon menu
 - **WHEN** the window is minimized to tray
-- **THEN** the tray SHALL show a context menu with "Show" and "Quit" options
+- **THEN** the tray SHALL show a context menu with a server-launch action ("Start server" or "Restart server"), "Show", and "Quit" options
 
 #### Scenario: Tray click reopens window
 - **WHEN** the user clicks the tray icon
@@ -70,6 +115,20 @@ The app SHALL show a system tray icon with a context menu when the window is clo
 - **WHEN** the tray is created on Windows or Linux
 - **THEN** it SHALL load `icon.ico` or `icon.png` from the resources directory
 
+#### Scenario: Tray shows Start server when no server is running
+- **WHEN** the tray menu is rebuilt and `isDashboardRunning(port)` returns `false`
+- **THEN** the menu SHALL show a "Start server" item
+- **AND** clicking it SHALL call `requestServerLaunch()` and update tray status when the outcome resolves
+
+#### Scenario: Tray shows Restart server when a server is running
+- **WHEN** the tray menu is rebuilt and `isDashboardRunning(port)` returns `true`
+- **THEN** the menu SHALL show a "Restart server" item
+- **AND** clicking it SHALL call `requestServerLaunch({ force: true })`
+
+#### Scenario: Tray menu reflects state changes within 5 seconds
+- **WHEN** server state changes (started or stopped) while the app is running
+- **THEN** the tray menu SHALL be rebuilt within 5 seconds to reflect the new state
+
 ### Requirement: macOS application menu
 The Electron app SHALL set up a native macOS application menu with standard menu items.
 
@@ -86,16 +145,22 @@ The Electron app SHALL set up a native macOS application menu with standard menu
 - **THEN** a minimal Help menu SHALL be set with "Doctor..." and "About" items
 
 ### Requirement: Doctor diagnostic function
-The app SHALL provide a Doctor function accessible from the app menu that checks all required components.
+The app SHALL provide a Doctor function accessible from the app menu that checks all required components and renders the result in a dedicated styled BrowserWindow (not a native message-box dialog).
 
 #### Scenario: Doctor checks all components
 - **WHEN** the user opens "Doctor..." from the menu
-- **THEN** it SHALL check: Electron version, system Node.js, bundled Node.js, bundled npm, pi CLI, openspec CLI, dashboard server code, TypeScript loader (tsx), dashboard server status, setup wizard state, API key configuration, and managed install directory
-- **AND** each check SHALL report status (ok/warning/error), version, and path
+- **THEN** it SHALL check: Electron version, system Node.js, bundled Node.js, bundled npm, pi CLI, openspec CLI, dashboard server code, offline packages bundle, TypeScript loader (tsx), dashboard server status, server log presence, server launch test, setup wizard state, API key configuration, and managed install directory
+- **AND** each check SHALL report status (ok/warning/error), version, path, the section it belongs to, and a remediation suggestion when the status is not ok
+
+#### Scenario: Doctor opens a styled window
+- **WHEN** the user opens "Doctor..." from the menu
+- **THEN** the app SHALL open a dedicated BrowserWindow rendering the report grouped by section, with a per-row status pill, message, optional path, and optional suggestion
+- **AND** the window SHALL provide toolbar actions: Re-run, Copy as Markdown, Copy as Plain text, Open server log, Open doctor log, Run setup wizard
+- **AND** opening Doctor while the window is already open SHALL focus the existing window instead of creating a second one
 
 #### Scenario: Doctor offers setup for errors
 - **WHEN** the Doctor report contains fixable errors
-- **THEN** the dialog SHALL offer a "Run Setup" button that triggers the setup wizard
+- **THEN** the window SHALL surface a "Run setup wizard" toolbar action that triggers the setup wizard
 
 ### Requirement: VM GPU detection
 The app SHALL auto-detect virtual machine environments and disable GPU acceleration to prevent white screen rendering issues.
@@ -209,23 +274,28 @@ The classifier used by the Electron shell to decide whether a URL is same-origin
 - **WHEN** `isSameOriginUrl("http:///", "http://localhost:8000")` is called (or any unparseable input)
 - **THEN** it SHALL return `false` so the caller treats it as external and routes through `shell.openExternal`
 
-### Requirement: Server-startup deadline is 60 seconds with cause-aware error wording
-The `waitForReady` callsites in `server-lifecycle.ts` SHALL use a deadline of `60_000` milliseconds (60 seconds), not `15_000`. The error message constructed when `waitForReady` returns unsuccessful SHALL distinguish two cases — child process exiting prematurely vs. deadline elapsed without the probe returning true — and use different wording for each. The current behaviour conflates both cases under "Server failed to start within 15 seconds (child exited with code N)", which is misleading because in the child-exit case the deadline is never actually reached.
+### Requirement: Server-startup deadline is 15 seconds with cause-aware error wording
 
-#### Scenario: Deadline is 60 seconds at every callsite
+The `waitForReady` callsites in `server-lifecycle.ts` SHALL use a deadline of `15_000` milliseconds (15 seconds), not `60_000`. The error message constructed when `waitForReady` returns unsuccessful SHALL distinguish two cases — child process exiting prematurely vs. deadline elapsed without the probe returning true — and use different wording for each. The deadline budget SHALL NOT exceed 15 s because beyond that point the failure is almost always terminal (port conflict, missing loader, bad Node) and the loading page (`resources/loading.html`) is a strictly better surface — it polls every 1.5 s and exposes Start server / Open Doctor / log-tail controls — than a frozen splash.
+
+#### Scenario: Deadline is 15 seconds at every callsite
+
 - **WHEN** `server-lifecycle.ts` is parsed
-- **THEN** every `waitForReady` call SHALL pass `deadlineMs: 60_000`
+- **THEN** every `waitForReady` call SHALL pass `deadlineMs: SERVER_READY_DEADLINE_MS`
+- **AND** `SERVER_READY_DEADLINE_MS` SHALL be `15_000`
 
 #### Scenario: Child-exit error wording
+
 - **WHEN** the spawned server child process exits before the probe returns true
 - **THEN** the thrown error SHALL begin with "Server child process exited prematurely (...)"
 - **AND** SHALL include a hint identifying the typical cause ("usually means a missing dependency or wrong TypeScript loader")
 - **AND** SHALL include the spawn command, CWD, and the last 20 lines of `server.log`
 
 #### Scenario: Deadline-exceeded error wording
+
 - **WHEN** the deadline elapses without either the probe returning true or the child exiting
-- **THEN** the thrown error SHALL begin with "Server did not respond within 60 seconds (...)"
-- **AND** SHALL include the hint "The server is likely still starting; try the Retry button"
+- **THEN** the thrown error SHALL begin with "Server did not respond within 15 seconds (...)"
+- **AND** SHALL include the hint "The server is likely still starting; the loading page will keep polling — try the Doctor button if it doesn't connect"
 - **AND** SHALL include the spawn command, CWD, and the last 20 lines of `server.log`
 
 ### Requirement: Power-user mode runs `installStandalone()` even when the wizard UI is skipped
@@ -299,3 +369,134 @@ The contract SHALL be regression-pinned by an automated test that asserts the of
 - **WHEN** the regression-pin test (`node-spawn-jiti-contract.test.ts`) runs
 - **THEN** it SHALL read the `@mariozechner/pi-coding-agent` pin from `packages/electron/offline-packages.json`
 - **AND** SHALL fail if the version does not begin with `0.70.` (i.e. is not within the contract-supported range)
+
+### Requirement: Extracted LaunchSource health-checks jiti reachability before returning
+The `extracted` LaunchSource resolution path SHALL verify that the bundled CLI tree is usable before returning. Specifically, `extractLaunchSource` SHALL compute `healthy = existsSync(cliPath) && resolveJitiFromAnchor(cliPath) !== null` after the version-marker check and SHALL run the bundle extraction + `installStandalone` block when `healthy` is `false`, even if the `.version` marker matches `currentVersion`. The current behavior — relying on the marker alone — is insufficient because the marker can be stale relative to the actual node_modules tree (partial extraction, antivirus quarantine, manual wipe, npm reconciliation prune).
+
+#### Scenario: Marker matches and jiti reachable — skip extraction
+- **WHEN** `extractLaunchSource` runs against a managed dir whose `.version` marker matches `bundledMinVersion` AND `cliPath` exists AND `resolveJitiFromAnchor(cliPath)` returns a non-null URL
+- **THEN** the function SHALL skip extraction (`didExtract: false`)
+- **AND** the returned `LaunchSource` SHALL be `{ kind: "extracted", cliPath, cwd: managedDir, didExtract: false }`
+
+#### Scenario: Marker matches but cliPath missing — re-extract
+- **WHEN** `extractLaunchSource` runs against a managed dir whose `.version` marker matches `bundledMinVersion` BUT `cliPath` does not exist on disk
+- **THEN** the function SHALL run `extractBundle` followed by `installStandalone` (the same block triggered by `needsExtraction`)
+- **AND** the returned `LaunchSource` SHALL reflect that re-extraction occurred
+
+#### Scenario: Marker matches and cliPath exists but jiti unreachable — re-extract
+- **WHEN** `extractLaunchSource` runs against a managed dir whose `.version` marker matches AND `cliPath` exists BUT `resolveJitiFromAnchor(cliPath)` returns `null`
+- **THEN** the function SHALL run `extractBundle` followed by `installStandalone`
+- **AND** SHALL log a single warn line `[launch-source] extracted source unhealthy (jiti missing); forcing re-extract` before doing so
+
+#### Scenario: Marker mismatch — re-extract regardless of health
+- **WHEN** `extractLaunchSource` runs against a managed dir whose `.version` marker does NOT match `bundledMinVersion`
+- **THEN** the function SHALL run `extractBundle` + `installStandalone` (existing behavior — health check is additive, not subtractive)
+
+#### Scenario: Health probe accepts injected dependencies for testing
+- **WHEN** `extractedSourceIsHealthy(cliPath, deps?)` is called from a unit test with `deps = { existsSync, resolveJitiFromAnchor }` mocked
+- **THEN** the helper SHALL use the injected functions and SHALL NOT touch the real filesystem or invoke the real jiti resolver
+
+#### Scenario: Health probe is defensive against thrown errors
+- **WHEN** an injected `existsSync` or `resolveJitiFromAnchor` throws
+- **THEN** `extractedSourceIsHealthy` SHALL return `false` (treating thrown errors as unhealthy)
+
+### Requirement: Idempotent server launch routine
+The Electron main process SHALL expose an exported `requestServerLaunch()` routine in `packages/electron/src/lib/server-lifecycle.ts` that is the single entry point used by the loading page button, tray menu items, and any future in-app launch controls. The routine SHALL be idempotent under concurrent invocation.
+
+#### Scenario: Returns already-running when server responds
+- **WHEN** `requestServerLaunch()` is called with `force: false` (or omitted)
+- **AND** `isDashboardRunning(port)` returns `true`
+- **THEN** it SHALL return `{ kind: "already-running", url }` without spawning a new process
+
+#### Scenario: Spawns server when none running
+- **WHEN** `requestServerLaunch()` is called and no server is running
+- **THEN** it SHALL invoke the existing server-spawn path (same code as startup `ensureServer()`)
+- **AND** on success return `{ kind: "started", url }`
+- **AND** on failure return `{ kind: "failed", reason, logTail }` — never throw
+
+#### Scenario: Force restart when server already running
+- **WHEN** `requestServerLaunch({ force: true })` is called and a server is running
+- **THEN** it SHALL POST `/api/shutdown` to stop the running server
+- **AND** wait (up to 5 seconds) for `isDashboardRunning(port)` to return `false`
+- **AND** then invoke the standard spawn path and return `{ kind: "started", url }`
+- **AND** if the shutdown POST fails, fall through to the spawn path anyway (which will fail with a clear `EADDRINUSE` error captured in the `failed` outcome)
+
+#### Scenario: Concurrent calls share one launch attempt
+- **WHEN** two callers invoke `requestServerLaunch()` while a launch is already in flight
+- **THEN** both callers SHALL receive the same `LaunchOutcome` from a single underlying spawn
+- **AND** at most one server process SHALL be spawned
+
+#### Scenario: Failure outcome is a value, not an exception
+- **WHEN** the spawn step throws synchronously or the spawned process exits non-zero before becoming healthy
+- **THEN** `requestServerLaunch()` SHALL catch the error and return `{ kind: "failed", reason: <string>, logTail: <string> }`
+- **AND** SHALL NOT propagate the exception to the caller
+
+### Requirement: Electron IPC channels for server control
+The Electron main process SHALL register IPC handlers for renderer-initiated server control. All channels SHALL be prefixed `dashboard:` and gated to the loading-page renderer's preload origin.
+
+#### Scenario: dashboard:request-launch handler
+- **WHEN** the renderer invokes `dashboard:request-launch` with payload `{ force?: boolean }`
+- **THEN** the main process SHALL call `requestServerLaunch(payload)` and return the resolved `LaunchOutcome`
+
+#### Scenario: dashboard:open-doctor handler
+- **WHEN** the renderer sends `dashboard:open-doctor`
+- **THEN** the main process SHALL open the existing Doctor diagnostic window (same path as the app menu's Doctor item)
+
+#### Scenario: dashboard:read-server-log handler
+- **WHEN** the renderer invokes `dashboard:read-server-log` with payload `{ lines?: number }` (default 20)
+- **THEN** the main process SHALL return up to `lines` trailing lines of `~/.pi/dashboard/server.log`
+- **AND** SHALL return an empty string if the file does not exist or cannot be read
+- **AND** SHALL read at most 8 KiB from the tail to bound memory
+
+#### Scenario: dashboard:launch-status push events
+- **WHEN** a launch is in progress
+- **THEN** the main process SHALL emit `dashboard:launch-status` events with payload `{ phase: "starting" | "spawning" | "waiting-health" | "ready" | "failed", message?: string }` to the loading-page renderer
+- **AND** the loading-page preload SHALL expose `onStatus(cb)` returning an unsubscribe function
+
+### Requirement: Splash window appears immediately on app launch
+
+The Electron main process SHALL create a splash window as the first action inside `app.whenReady()`, before any dependency detection, module resolution, or server launch work. The splash window SHALL be frameless, transparent, centered, alwaysOnTop, and non-resizable. It SHALL display a visual identity (pi logo + app name), a CSS spinner animation, and a status text line.
+
+#### Scenario: Cold launch on Windows shows splash within 1 second
+
+- **GIVEN** a Windows user double-clicks the packaged pi-dashboard executable on a cold-cached disk
+- **WHEN** `app.whenReady()` resolves
+- **THEN** a splash window SHALL appear within 1 second
+- **AND** the splash SHALL be visible continuously until the next intended window (wizard or main) is ready to show
+- **AND** no user action SHALL be required to dismiss it
+
+#### Scenario: Failed splash render does not block startup
+
+- **GIVEN** the splash window fails to create or render (e.g. GPU crash)
+- **WHEN** the error is caught in `app.whenReady()`
+- **THEN** the error SHALL be logged
+- **AND** the main process SHALL continue to open the wizard or main window as normal
+
+### Requirement: Status messages progress through detection phases
+
+The splash window SHALL receive status updates from the main process via a `updateSplashStatus(text)` helper that writes to the splash `webContents` (current implementation: `webContents.executeJavaScript()` mutating the inline `<div id="status">`). The main process SHALL emit a status update before each detection phase and before each window-transition phase.
+
+#### Scenario: Each detection phase emits a status update
+
+- **GIVEN** the main process runs dependency detection
+- **WHEN** it invokes server health-check, `detectPi()`, bridge-extension check, wizard open, server launch, or dashboard open
+- **THEN** a corresponding status update SHALL be sent to the splash window before that call
+- **AND** the status text SHALL be user-readable (e.g. "Checking Node.js…", not "detectSystemNode()")
+
+### Requirement: Splash closes when the next window is ready
+
+When the main process creates a wizard or main window, it SHALL close the splash only after the target window's `ready-to-show` event fires (or equivalent readiness signal). This prevents a visible gap between splash and next window.
+
+#### Scenario: Splash closes after main window is ready
+
+- **GIVEN** splash is visible and main window is being created
+- **WHEN** the main window emits `ready-to-show`
+- **THEN** the splash window SHALL close
+- **AND** the main window SHALL be shown in the same animation frame (no black flash)
+
+#### Scenario: Splash closes after wizard window is ready
+
+- **GIVEN** splash is visible and dependencies are missing, so the wizard is being created
+- **WHEN** the wizard window emits `ready-to-show`
+- **THEN** the splash window SHALL close
+- **AND** the wizard window SHALL be shown

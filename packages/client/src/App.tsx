@@ -43,12 +43,11 @@ import { BootstrapBanner } from "./components/BootstrapBanner.js";
 import { useBootstrapStatus } from "./hooks/useBootstrapStatus.js";
 import { MissingRequiredBanner } from "./components/MissingRequiredBanner.js";
 import { useInstallPrompt } from "./hooks/useInstallPrompt.js";
-import { TerminalView } from "./components/TerminalView.js";
 import { TerminalsView } from "./components/TerminalsView.js";
 import { EditorView } from "./components/EditorView.js";
 import { decodeFolderPath, encodeFolderPath } from "./lib/folder-encoding.js";
 import { FileDiffView } from "./components/FileDiffView.js";
-import { createInitialState, reduceEvent, resolveInteractiveRequest, type SessionState } from "./lib/event-reducer.js";
+import { createInitialState, findLastUserPrompt, reduceEvent, resolveInteractiveRequest, type SessionState } from "./lib/event-reducer.js";
 import { useMessageHandler } from "./hooks/useMessageHandler.js";
 import { useEditors } from "./lib/use-editors.js";
 import { useContentViews } from "./hooks/useContentViews.js";
@@ -156,7 +155,11 @@ export default function App() {
   }, [wsUrl]);
   const [, navigate] = useLocation();
   const [match, params] = useRoute("/session/:id");
-  const [termMatch, termParams] = useRoute("/terminal/:id");
+  // Legacy /terminal/:id route removed — see change:
+  // fix-terminal-half-height-dual-mount. Terminals are reached via
+  // /folder/:encodedCwd/terminals. The dual-mount it caused (one
+  // <TerminalView> here + one inside <TerminalsView>) was the root
+  // cause of half-height rendering and competing FitAddon resizes.
   const [folderTermMatch, folderTermParams] = useRoute("/folder/:encodedCwd/terminals");
   const [folderEditorMatch, folderEditorParams] = useRoute("/folder/:encodedCwd/editor");
   const [settingsMatch] = useRoute("/settings");
@@ -172,7 +175,6 @@ export default function App() {
     connectionStatus: status,
     send,
   });
-  const selectedTerminalId = termMatch ? termParams?.id : undefined;
   const folderTermCwd = folderTermMatch ? decodeFolderPath(folderTermParams?.encodedCwd ?? "") : null;
   const folderEditorCwd = folderEditorMatch ? decodeFolderPath(folderEditorParams?.encodedCwd ?? "") : null;
   const sidebar = useSidebarState();
@@ -210,6 +212,11 @@ export default function App() {
   const spawningCwdsRef = useRef<Set<string>>(spawningCwds);
   spawningCwdsRef.current = spawningCwds;
   const spawnTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // Maps client-minted requestId → cwd, used to correlate session_added
+  // back to the originating click for auto-select after spawn AND fork.
+  // Lives alongside `spawningCwds` (which keeps placeholder + disabled-button
+  // behavior cwd-keyed). See change: spawn-correlation-token.
+  const pendingSpawnsRef = useRef<Map<string, { cwd: string; kind: "spawn" | "resume" }>>(new Map());
   const [sessionOrderMap, setSessionOrderMap] = useState<Map<string, string[]>>(new Map());
   const [pinnedDirectories, setPinnedDirectories] = useState<string[]>([]);
   const [pinDialogOpen, setPinDialogOpen] = useState(false);
@@ -335,7 +342,7 @@ export default function App() {
 
   const handleMessage = useMessageHandler(
     { setSessions, setSessionStates, setSessionCommands, setSessionFlows, setFileResults, setOpenspecMap, setModelsMap, setRolesMap, setSpawnResult, setSessionOrderMap, setPinnedDirectories, setTerminals, setEditorStatuses, setDiscoveredServers, setSpawnErrors, setResumeErrors },
-    { send, navigate, clearSpawningCwd, spawningCwdsRef, subscribedRef, pendingTerminalCwdRef, lastCreatedTerminalIdRef, maxSeqMapRef, selectedSessionIdRef },
+    { send, navigate, clearSpawningCwd, spawningCwdsRef, subscribedRef, pendingTerminalCwdRef, lastCreatedTerminalIdRef, maxSeqMapRef, selectedSessionIdRef, pendingSpawnsRef },
   );
 
   useEffect(() => {
@@ -560,6 +567,7 @@ export default function App() {
     selectedId, send, navigate, setMobileOpen,
     setSessions, setSessionStates, setSpawningCwds, setTerminals,
     clearSpawningCwd, spawnTimeoutsRef, pendingTerminalCwdRef, terminals,
+    pendingSpawnsRef,
   });
   const {
     handleAbort, handleForceKill, handleCancelPending, handleRespondToUi, handleFlowAction, handleSend,
@@ -730,11 +738,21 @@ export default function App() {
     return ids;
   }, [sessionStates]);
 
+  // Compute set of session IDs in active provider-retry phase (retryState set,
+  // no terminal error). See change: fix-provider-retry-infinite-loop.
+  const retrySessionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const [id, state] of sessionStates) {
+      if (state.retryState && !state.lastError) ids.add(id);
+    }
+    return ids;
+  }, [sessionStates]);
+
   const sessionList = (
     <SessionList
       sessions={Array.from(sessions.values())}
       terminals={Array.from(terminals.values())}
-      selectedId={selectedId ?? selectedTerminalId}
+      selectedId={selectedId}
       onSelect={handleSelect}
       contextUsageMap={contextUsageMap}
       openspecMap={openspecMap}
@@ -793,6 +811,7 @@ export default function App() {
       editorStatuses={editorStatuses}
       editorAvailable={editorAvailable}
       errorSessionIds={errorSessionIds}
+      retrySessionIds={retrySessionIds}
       spawnErrors={spawnErrors}
       onDismissSpawnError={(cwd) => setSpawnErrors((prev) => { const next = new Map(prev); next.delete(cwd); return next; })}
       resumeErrors={resumeErrors}
@@ -1101,7 +1120,15 @@ export default function App() {
             </div>
           }>
             <SessionAssetsProvider assets={selectedSession?.assets}>
-            <ChatView ref={chatViewRef} sessionId={selectedId} state={selectedState} toolContext={toolContext} onCancelPending={handleCancelPending} onRespondToUi={handleRespondToUi} onAbort={handleAbort} onForceKill={handleForceKill} onForkFromMessage={selectedId ? (entryId) => handleResumeSession(selectedId, "fork", entryId) : undefined} onRetryAfterError={selectedId ? () => handleResumeSession(selectedId, "continue") : undefined} onDismissError={selectedId ? () => {
+            <ChatView ref={chatViewRef} sessionId={selectedId} state={selectedState} toolContext={toolContext} onCancelPending={handleCancelPending} onRespondToUi={handleRespondToUi} onAbort={handleAbort} onForceKill={handleForceKill} onForkFromMessage={selectedId ? (entryId) => handleResumeSession(selectedId, "fork", entryId) : undefined} onRetryAfterError={selectedId ? () => {
+              // Retry the last user prompt by re-sending it via send_prompt.
+              // The previous behaviour (handleResumeSession with mode="continue")
+              // no-ops on alive-but-errored sessions because the server short-
+              // circuits with "Session is already active". See change:
+              // fix-retry-resends-last-user-message.
+              const last = findLastUserPrompt(selectedState.messages);
+              if (last) handleSendPromptToSession(selectedId, last.text, last.images);
+            } : undefined} onDismissError={selectedId ? () => {
               setSessionStates((prev) => {
                 const next = new Map(prev);
                 const current = next.get(selectedId!);
@@ -1152,6 +1179,7 @@ export default function App() {
             fileResults={fileResults}
             disabled={false}
             sessionStatus={selectedState.status}
+            retrying={selectedState.retryState !== undefined}
             onAbort={handleAbort}
             onForceKill={handleForceKill}
             pendingPrompt={!!selectedState.pendingPrompt}
@@ -1335,20 +1363,6 @@ export default function App() {
     </div>
   ) : null;
 
-  // Terminal keep-alive views — always mounted, CSS toggled (for legacy /terminal/:id route)
-  const terminalViews = useMemo(() => {
-    return Array.from(terminals.values()).map((t) => (
-      <TerminalView
-        key={t.id}
-        terminalId={t.id}
-        visible={selectedTerminalId === t.id}
-        terminalName={t.title || t.shell.split("/").pop()}
-        onTitle={handleTerminalTitle}
-        onClose={handleKillTerminal}
-      />
-    ));
-  }, [terminals, selectedTerminalId, handleTerminalTitle, handleKillTerminal]);
-
   // Get terminals for a specific folder cwd
   const getTerminalsForCwd = useCallback((cwd: string) => {
     return Array.from(terminals.values()).filter((t) => t.cwd === cwd);
@@ -1381,21 +1395,6 @@ export default function App() {
     return null;
   }, [folderTermCwd, folderEditorCwd, getTerminalsForCwd, handleCreateTerminal, handleKillTerminal, handleRenameTerminal, handleTerminalTitle, handleEditorClose]);
 
-  // Navigate away from terminal when it's removed
-  useEffect(() => {
-    if (selectedTerminalId && !terminals.has(selectedTerminalId)) {
-      navigate("/");
-    }
-  }, [selectedTerminalId, terminals, navigate]);
-
-  // Navigate away from invalid terminal URL (same as session logic)
-  const terminalsLoaded = terminals.size > 0 || sessions.size > 0;
-  useEffect(() => {
-    if (selectedTerminalId && terminalsLoaded && !terminals.has(selectedTerminalId)) {
-      navigate("/");
-    }
-  }, [selectedTerminalId, terminalsLoaded, terminals, navigate]);
-
   const allSessionsList = useMemo(() => Array.from(sessions.values()), [sessions]);
 
   const apiProvider = (children: React.ReactNode) => (
@@ -1414,7 +1413,6 @@ export default function App() {
   if (isMobile) {
     const mobileDepth = getMobileDepth({
       selectedId,
-      selectedTerminalId,
       folderTermCwd,
       folderEditorCwd,
       settingsMatch: !!settingsMatch,
@@ -1529,11 +1527,9 @@ export default function App() {
               />
             ) : folderEditorCwd ? (
               <EditorView cwd={folderEditorCwd} onClose={handleEditorClose} />
-            ) : selectedTerminalId ? (
-              <div className="flex-1 flex flex-col min-w-0 h-full">
-                {terminalViews}
-              </div>
             ) : sessionDetail ?? (
+            // Legacy /terminal/:id branch removed — see change:
+            // fix-terminal-half-height-dual-mount.
               <LandingPage
                 providersReady={providersReady.ready}
                 pinnedCount={pinnedDirectories.length}
@@ -1578,14 +1574,17 @@ export default function App() {
 
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
         {connectionBanner}
-        {/* Terminal views are always mounted (keep-alive), CSS hidden/shown */}
-        {terminalViews}
-        {/* Folder views (TerminalsView or EditorView) */}
+        {/* Folder views (TerminalsView or EditorView) — single owner of
+            <TerminalView> mounting. The legacy keep-alive list above
+            (mounted unconditionally for the /terminal/:id route) was
+            removed; it caused dual-mounting per terminal id and the
+            half-height rendering bug. See change:
+            fix-terminal-half-height-dual-mount. */}
         {folderViewContent && (
           <div className="flex-1 flex flex-col min-w-0 min-h-0">{folderViewContent}</div>
         )}
-        {/* Show session detail or landing page when no terminal/folder view is selected */}
-        {!selectedTerminalId && !folderTermCwd && !folderEditorCwd && !settingsMatch && !tunnelSetupMatch && (
+        {/* Show session detail or landing page when no folder view is selected */}
+        {!folderTermCwd && !folderEditorCwd && !settingsMatch && !tunnelSetupMatch && (
           archiveBrowserCwd ? (
             <ArchiveBrowserView
               cwd={archiveBrowserCwd}

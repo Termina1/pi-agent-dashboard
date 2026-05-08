@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useCallback, useState, useMemo, forwardRef, u
 import { Icon } from "@mdi/react";
 import { mdiContentCopy, mdiTextBox, mdiLoading, mdiChevronDown, mdiSourceFork } from "@mdi/js";
 import { ErrorBanner } from "./ErrorBanner";
+import { RetryBanner } from "./RetryBanner";
 import type { SessionState, ChatImage, InteractiveUiRequest } from "../lib/event-reducer.js";
 import type { ToolContext } from "./tool-renderers/index.js";
 import { MarkdownContent } from "./MarkdownContent.js";
@@ -20,6 +21,7 @@ import { CollapsedToolGroup } from "./CollapsedToolGroup.js";
 import { findRetriedErrorIds, findActiveInteractiveToolResultIds } from "../lib/collapse-retried-errors.js";
 import { RetriedErrorBadge } from "./RetriedErrorBadge.js";
 import { ImageLightbox } from "./ImageLightbox.js";
+import { SkillInvocationCard } from "./SkillInvocationCard.js";
 
 interface Props {
   sessionId?: string;
@@ -277,6 +279,30 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
         }
 
         if (msg.role === "user") {
+          // Skill invocations render as a distinct collapsible card so chat
+          // doesn't show walls of expanded skill body. Plain user messages
+          // continue to render as the existing blue bubble.
+          // See change: render-skill-invocations-collapsibly.
+          if (msg.skill) {
+            return (
+              <div key={msg.id} className="mt-4 mb-4 flex justify-end" {...(msg.turnIndex != null ? { "data-turn": msg.turnIndex } : {})}>
+                <div className={bubbleMax}>
+                  {msg.images && msg.images.length > 0 && (
+                    <div className="mb-2">
+                      <ImageAttachments images={msg.images} />
+                    </div>
+                  )}
+                  <SkillInvocationCard
+                    skill={msg.skill}
+                    rawContent={msg.content}
+                    timestamp={msg.timestamp}
+                    entryId={msg.entryId}
+                    onFork={onForkFromMessage}
+                  />
+                </div>
+              </div>
+            );
+          }
           return (
             <div key={msg.id} className="mt-4 mb-4 flex justify-end" {...(msg.turnIndex != null ? { "data-turn": msg.turnIndex } : {})}>
               <div className={`bg-blue-500/10 border border-blue-500/20 border-l-2 border-l-blue-400 rounded-xl shadow-md px-4 py-2 ${bubbleMax}`}>
@@ -434,6 +460,14 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
             <span className="inline-block w-1.5 h-4 bg-[var(--bg-surface)] animate-pulse ml-0.5" />
           </div>
         </div>
+      )}
+
+      {/* Retry banner — visible while a synthesized provider retry is in flight.
+          Bridge sends `delayMs: -1` / `maxAttempts: -1` sentinels (pi does not
+          expose its retry settings); RetryBanner renders an indeterminate state.
+          See change: fix-provider-retry-infinite-loop. */}
+      {state.retryState && (
+        <RetryBanner retryState={state.retryState} onAbort={onAbort} />
       )}
 
       {/* Error banner */}

@@ -1,6 +1,6 @@
 {
   "name": "@blackbelt-technology/pi-dashboard-extension",
-  "version": "0.4.6",
+  "version": "0.5.0",
   "description": "Pi bridge extension for pi-dashboard",
   "type": "module",
   "repository": {
@@ -26,7 +26,7 @@
     ".pi/skills/push-notify-user/"
   ],
   "dependencies": {
-    "@blackbelt-technology/pi-dashboard-shared": "^0.4.6",
+    "@blackbelt-technology/pi-dashboard-shared": "^0.5.0",
     "ws": "^8.18.0"
   },
   "peerDependencies": {

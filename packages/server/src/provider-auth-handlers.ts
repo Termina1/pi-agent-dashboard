@@ -29,6 +29,8 @@ export function generateState(): string {
 export interface AuthCodeHandler {
   flowType: "auth_code";
   providerId: string;
+  /** Human-readable name surfaced to the UI. */
+  displayName: string;
   /** Port registered with the OAuth provider for the redirect URI */
   callbackPort: number;
   /** Path registered with the OAuth provider for the redirect URI */
@@ -40,6 +42,8 @@ export interface AuthCodeHandler {
 export interface DeviceCodeHandler {
   flowType: "device_code";
   providerId: string;
+  /** Human-readable name surfaced to the UI. */
+  displayName: string;
   requestDeviceCode(enterpriseDomain?: string): Promise<DeviceCodeData>;
   pollForToken(deviceCode: string, interval: number, expiresIn: number, extra?: Record<string, unknown>): Promise<OAuthCredential>;
 }
@@ -93,6 +97,7 @@ const ANTHROPIC_SCOPES = "org:create_api_key user:profile user:inference user:se
 export const anthropicHandler: AuthCodeHandler = {
   flowType: "auth_code",
   providerId: "anthropic",
+  displayName: "Anthropic (Claude Pro/Max)",
   callbackPort: 53692,
   callbackPath: "/callback",
 
@@ -146,6 +151,7 @@ const CODEX_SCOPE = "openid profile email offline_access";
 export const codexHandler: AuthCodeHandler = {
   flowType: "auth_code",
   providerId: "openai-codex",
+  displayName: "ChatGPT Plus/Pro (Codex)",
   callbackPort: 1455,
   callbackPath: "/auth/callback",
 
@@ -206,6 +212,7 @@ function githubUrls(domain: string) {
 export const githubCopilotHandler: DeviceCodeHandler = {
   flowType: "device_code",
   providerId: "github-copilot",
+  displayName: "GitHub Copilot",
 
   async requestDeviceCode(enterpriseDomain) {
     const domain = enterpriseDomain || "github.com";
@@ -336,6 +343,7 @@ const GEMINI_SCOPES = [
 export const geminiCliHandler: AuthCodeHandler = {
   flowType: "auth_code",
   providerId: "google-gemini-cli",
+  displayName: "Google Gemini CLI",
   callbackPort: 8085,
   callbackPath: "/oauth2callback",
 
@@ -384,6 +392,7 @@ const AG_SCOPES = [
 export const antigravityHandler: AuthCodeHandler = {
   flowType: "auth_code",
   providerId: "google-antigravity",
+  displayName: "Antigravity",
   callbackPort: 51121,
   callbackPath: "/oauth-callback",
 

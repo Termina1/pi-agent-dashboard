@@ -18,12 +18,13 @@ import { createPreferencesStore, type PreferencesStore } from "./preferences-sto
 import { createMetaPersistence, type MetaPersistence } from "./meta-persistence.js";
 import { createSessionOrderManager, type SessionOrderManager } from "./session-order-manager.js";
 import { createPendingForkRegistry, type PendingForkRegistry } from "./pending-fork-registry.js";
+import { createPendingClientCorrelations } from "./pending-client-correlations.js";
 import { createPendingAttachRegistry } from "./pending-attach-registry.js";
 import { createPendingResumeIntentRegistry } from "./pending-resume-intent-registry.js";
 import { applyReattachPolicy } from "./reattach-placement.js";
 
 // pending-load-manager removed — server loads sessions directly via DirectoryService
-import { createDirectoryService, type DirectoryService } from "./directory-service.js";
+import { createDirectoryService, isOpenSpecDataEmpty, type DirectoryService } from "./directory-service.js";
 import { createTerminalManager, type TerminalManager } from "./terminal-manager.js";
 import { createTerminalGateway, type TerminalGateway } from "./terminal-gateway.js";
 import { writePid, removePid } from "./server-pid.js";
@@ -50,10 +51,12 @@ import { registerFileRoutes } from "./routes/file-routes.js";
 import { registerOpenSpecRoutes } from "./routes/openspec-routes.js";
 import { registerSystemRoutes } from "./routes/system-routes.js";
 import { registerPushRoutes, registerPushMisconfiguredMiddleware } from "./routes/push-routes.js";
+import { registerDoctorRoutes } from "./routes/doctor-routes.js";
 import { registerProviderAuthRoutes } from "./routes/provider-auth-routes.js";
 import { registerPackageRoutes } from "./routes/package-routes.js";
 import { registerRecommendedRoutes, invalidateRecommendedCache } from "./routes/recommended-routes.js";
 import { registerPiCoreRoutes } from "./routes/pi-core-routes.js";
+import { registerPiChangelogRoutes } from "./routes/pi-changelog-routes.js";
 import { PiCoreChecker } from "./pi-core-checker.js";
 import { PiCoreUpdater } from "./pi-core-updater.js";
 import { registerToolRoutes } from "./routes/tool-routes.js";
@@ -152,10 +155,6 @@ export interface PostInstallRepairDeps {
   browserGateway: { broadcastToAll(msg: ServerToBrowserMessage): void };
 }
 
-function isOpenSpecDataEmpty(d: OpenSpecData | undefined): boolean {
-  if (!d) return true;
-  return !d.initialized && (!d.changes || d.changes.length === 0);
-}
 
 /**
  * Centralized post-install repair work fired on every `installing → ready`
@@ -278,6 +277,10 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
   const metaPersistence = createMetaPersistence();
   const sessionOrderManager = createSessionOrderManager(preferencesStore);
   const pendingForkRegistry = createPendingForkRegistry();
+  // Maps spawnToken → originating browser requestId. Surfaced as
+  // session_added.spawnRequestId so the client can auto-select / dismiss
+  // its placeholder by exact correlation. See change: spawn-correlation-token.
+  const pendingClientCorrelations = createPendingClientCorrelations();
 
   // Restore sessions from per-session .meta.json files (scans ~/.pi/agent/sessions/)
   const scanResult = scanAllSessions();
@@ -530,7 +533,7 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
     },
   });
 
-  const browserGateway = createBrowserGateway(sessionManager, eventStore, piGateway, undefined, pendingForkRegistry, sessionOrderManager, preferencesStore, directoryService, terminalManager, pendingDashboardSpawns, config.maxWsBufferBytes, pendingAttachRegistry, pendingResumeIntents);
+  const browserGateway = createBrowserGateway(sessionManager, eventStore, piGateway, undefined, pendingForkRegistry, sessionOrderManager, preferencesStore, directoryService, terminalManager, pendingDashboardSpawns, config.maxWsBufferBytes, pendingAttachRegistry, pendingResumeIntents, pendingClientCorrelations);
 
   // ── Push dispatcher (conditional on config.push.enabled && !config.push.errors) ──
   let pushDispatcher: PushDispatcher | undefined;
@@ -600,10 +603,13 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
     pendingAttachRegistry,
     viewedSessionTracker: browserGateway.viewedSessionTracker,
     pushDispatcher,
+    pendingClientCorrelations,
   });
 
   // Auto-shutdown idle timer
-  const idleTimer = createIdleTimer(config, piGateway);
+  // Active terminals keep the server alive even when no pi sessions are
+  // attached. See change: fix-terminal-half-height-dual-mount.
+  const idleTimer = createIdleTimer(config, piGateway, () => terminalManager.list().length > 0);
 
   const fastify = Fastify({
     logger: false,
@@ -729,6 +735,7 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
     bootstrapState,
     bootstrapQueue,
     pendingResumeIntents,
+    pendingAttachRegistry,
   });
 
   // Register route modules
@@ -749,7 +756,7 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
       if (data) browserGateway.broadcastToAll({ type: "openspec_update", cwd, data });
     },
   });
-  registerSystemRoutes(fastify, { sessionManager, preferencesStore, metaPersistence, config, networkGuard, version: pkgVersion, directoryService, piGateway });
+  registerSystemRoutes(fastify, { sessionManager, preferencesStore, metaPersistence, config, networkGuard, version: pkgVersion, directoryService, piGateway, bootstrapState });
 
   // ── Push routes (conditional) ────────────────────────────────────
   if (config.push?.enabled) {
@@ -760,6 +767,8 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
     }
   }
 
+  // GET /api/doctor — see change: doctor-rich-output (task 4.2). Auth-gated identically to /api/config.
+  registerDoctorRoutes(fastify);
   registerToolRoutes(fastify, { registry: getDefaultRegistry(), networkGuard });
   registerJjRoutes(fastify, { browserGateway, pendingAttachRegistry, networkGuard });
 
@@ -949,6 +958,8 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
       message: event.message,
     });
   });
+  registerPiChangelogRoutes(fastify, { bootstrapState });
+
   registerPiCoreRoutes(fastify, {
     piCoreChecker,
     piCoreUpdater,

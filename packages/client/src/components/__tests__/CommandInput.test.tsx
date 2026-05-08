@@ -266,6 +266,36 @@ describe("Force kill escalation", () => {
     expect(container.querySelector('[data-testid="killing-button"]')).toBeNull();
   });
 
+  it("shows Stop button when retrying=true even if sessionStatus is idle (provider-retry-state)", () => {
+    const onAbort = vi.fn();
+    const { container } = renderInput({ sessionStatus: "idle", retrying: true, onAbort, onForceKill: vi.fn() });
+    expect(container.querySelector('[data-testid="stop-button"]')).not.toBeNull();
+  });
+
+  it("Stop pressed during retry escalates to Force Stop while retrying remains true", () => {
+    const onAbort = vi.fn();
+    const onForceKill = vi.fn();
+    const { container } = renderInput({ sessionStatus: "idle", retrying: true, onAbort, onForceKill });
+    fireEvent.click(container.querySelector('[data-testid="stop-button"]')!);
+    expect(onAbort).toHaveBeenCalledOnce();
+    expect(container.querySelector('[data-testid="force-stop-button"]')).not.toBeNull();
+  });
+
+  it("resets stop state when retrying clears AND sessionStatus is not streaming", () => {
+    const onAbort = vi.fn();
+    const onForceKill = vi.fn();
+    const { container, rerender } = render(
+      <CommandInput commands={commands} onSend={vi.fn()} sessionStatus="idle" retrying={true} onAbort={onAbort} onForceKill={onForceKill} />
+    );
+    fireEvent.click(container.querySelector('[data-testid="stop-button"]')!);
+    expect(container.querySelector('[data-testid="force-stop-button"]')).not.toBeNull();
+    rerender(
+      <CommandInput commands={commands} onSend={vi.fn()} sessionStatus="idle" retrying={false} onAbort={onAbort} onForceKill={onForceKill} />
+    );
+    expect(container.querySelector('[data-testid="stop-button"]')).toBeNull();
+    expect(container.querySelector('[data-testid="force-stop-button"]')).toBeNull();
+  });
+
   it("does not transition to Force Stop without onForceKill prop", () => {
     const onAbort = vi.fn();
     const { container } = renderInput({ sessionStatus: "streaming", onAbort });

@@ -1,12 +1,17 @@
 /**
  * Resolve the jiti register hook from pi's process context.
  *
- * The bridge extension runs inside pi's Node.js process. process.argv[1]
- * points to pi's CLI entry (e.g., pi-coding-agent/dist/cli.js). Since
- * jiti is a dependency of pi-coding-agent, createRequire(process.argv[1])
- * can resolve it directly. Modern pi builds depend on the plain `jiti`
- * package name; older forks used scoped `@mariozechner/jiti` /
- * `@oh-my-pi/jiti` names, so we probe all supported variants.
+ * can resolve it directly.
+ *
+ * Supported jiti providers, in lookup order:
+ *   1. `@mariozechner/jiti` — legacy fork shipped with pi ≤ 0.73.0.
+ *   2. `@oh-my-pi/jiti`     — fork shipped with `@oh-my-pi/pi-coding-agent`.
+ *   3. `jiti`               — upstream package used by modern pi builds,
+ *                              including `@earendil-works/pi-coding-agent`.
+ *
+ * Forks are tried first to preserve behaviour for users on older pi
+ * versions; upstream is the fallthrough for pi 0.73.1+. See change:
+ * support-upstream-jiti-resolution.
  */
 
 import { createRequire } from "node:module";
@@ -14,11 +19,16 @@ import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const JITI_PACKAGES = [
-  "jiti",
+/**
+ * Lookup order for jiti providers. Forks first (legacy pi ≤ 0.73.0),
+ * upstream `jiti` last (pi 0.73.1+ / modern upstream-derived builds).
+ * Exported so tests can verify the contract without mocking module resolution.
+ */
+export const JITI_PACKAGES = [
   "@mariozechner/jiti",
   "@oh-my-pi/jiti",
-];
+  "jiti",
+] as const;
 
 /**
  * Pure helper: given a jiti package.json path, return the file:// URL of
@@ -48,6 +58,29 @@ export function buildJitiRegisterUrl(pkgJsonPath: string): string {
 }
 
 /**
+ * Test seam: a function that takes a package specifier (e.g.
+ * `"jiti/package.json"`) and returns the resolved path. Production
+ * supplies `createRequire(realpath(process.argv[1])).resolve`; tests
+ * supply a stub.
+ */
+export type JitiResolver = (specifier: string) => string;
+
+/**
+ * Internal: walk the JITI_PACKAGES list using the given resolver and
+ * return the first hit's register URL. Pure function once the
+ * resolver is supplied. Returns null when no provider resolves.
+ */
+export function pickJitiRegisterUrl(resolver: JitiResolver): string | null {
+  for (const jiti of JITI_PACKAGES) {
+    try {
+      const pkgJson = resolver(`${jiti}/package.json`);
+      return buildJitiRegisterUrl(pkgJson);
+    } catch { /* next */ }
+  }
+  return null;
+}
+
+/**
  * Returns jiti's register hook as a file:// URL suitable for `node --import`.
  * Uses process.argv[1] (pi's entry point) to anchor module resolution.
  *
@@ -61,12 +94,8 @@ export function resolveJitiImport(): string {
       // Resolve symlinks — process.argv[1] may be a symlink (e.g., bin/pi → dist/cli.js)
       const resolved = realpathSync(anchor);
       const req = createRequire(resolved);
-      for (const jiti of JITI_PACKAGES) {
-        try {
-          const pkgJson = req.resolve(`${jiti}/package.json`);
-          return buildJitiRegisterUrl(pkgJson);
-        } catch { /* next */ }
-      }
+      const url = pickJitiRegisterUrl((spec) => req.resolve(spec));
+      if (url) return url;
     } catch { /* fall through */ }
   }
 
@@ -101,5 +130,25 @@ export function resolveJitiFromAnchor(anchorPath: string): string | null {
       } catch { /* next */ }
     }
   } catch { /* ignore */ }
+  return null;
+}
+
+/**
+ * Test seam for `resolveJitiFromAnchor`. Pure function: given a resolver
+ * and a `pathExists` predicate, walk JITI_PACKAGES and return the first
+ * hit's register URL. Production wires `createRequire(anchor).resolve`
+ * and `existsSync`; tests inject stubs.
+ */
+export function pickJitiFromAnchor(
+  resolver: JitiResolver,
+  pathExists: (p: string) => boolean,
+): string | null {
+  for (const jiti of JITI_PACKAGES) {
+    try {
+      const pkgJson = resolver(`${jiti}/package.json`);
+      const registerPath = path.join(path.dirname(pkgJson), "lib", "jiti-register.mjs");
+      if (pathExists(registerPath)) return pathToFileURL(registerPath).href;
+    } catch { /* next */ }
+  }
   return null;
 }
