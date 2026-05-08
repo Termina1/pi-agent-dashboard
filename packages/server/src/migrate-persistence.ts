@@ -1,5 +1,6 @@
 /**
- * Migration utility: converts sessions.json + state.json → per-session .meta.json + preferences.json.
+ * Migration utility: converts sessions.json + state.json → dashboard-owned
+ * per-session .meta.json cache files + preferences.json.
  * Runs automatically on first startup when old files are detected.
  * Idempotent — safe to run multiple times.
  */
@@ -67,8 +68,8 @@ export function needsMigration(paths?: MigrationPaths): boolean {
 
 /**
  * Run the full migration:
- * 1. Read sessions.json → write .meta.json for each session
- * 2. Read state.json → apply hiddenSessions to .meta.json, write preferences.json
+ * 1. Read sessions.json → write dashboard-owned .meta.json for each session
+ * 2. Read state.json → apply hiddenSessions to dashboard-owned .meta.json, write preferences.json
  * 3. Rename old files to .bak
  */
 export function runMigration(paths?: MigrationPaths): MigrationResult {
@@ -85,7 +86,7 @@ export function runMigration(paths?: MigrationPaths): MigrationResult {
     oldFilesRenamed: [],
   };
 
-  // --- Step 1: Migrate sessions.json → per-session .meta.json ---
+  // --- Step 1: Migrate sessions.json → dashboard-owned per-session .meta.json ---
   const sessions = readJsonFile<OldSession[]>(sessionsFile, []);
   const sessionFileById = new Map<string, string>();
 
@@ -117,7 +118,7 @@ export function runMigration(paths?: MigrationPaths): MigrationResult {
       cachedAt: Date.now(),
     };
 
-    // Merge with existing .meta.json — strip undefined values so they don't overwrite
+    // Merge with existing metadata — strip undefined values so they don't overwrite
     const existing = readSessionMeta(session.sessionFile) ?? {};
     const cleaned = Object.fromEntries(Object.entries(newMeta).filter(([, v]) => v !== undefined));
     const merged = { ...existing, ...cleaned };
@@ -128,7 +129,7 @@ export function runMigration(paths?: MigrationPaths): MigrationResult {
   // --- Step 2: Migrate state.json ---
   const state = readJsonFile<OldState>(stateFile, {});
 
-  // Apply hidden IDs to .meta.json files
+  // Apply hidden IDs to per-session metadata files
   if (state.hiddenSessions) {
     for (const hiddenId of state.hiddenSessions) {
       // Try to find the session file

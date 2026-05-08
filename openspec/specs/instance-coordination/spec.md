@@ -1,6 +1,6 @@
 ## Purpose
 
-Ensure at most one dashboard instance runs per canonical HOME directory. The dashboard owns HOME-scoped state (`~/.pi/agent/settings.json`, per-session `.meta.json` sidecars, `~/.pi/dashboard/preferences.json`, `headless-pids.json`, `editor-pids.json`) that would corrupt under concurrent writers. A per-HOME advisory lock enforces this invariant at runtime; multi-user (two distinct canonical HOMEs on the same host) continues to work because each user has a distinct lock path.
+Ensure at most one dashboard instance runs per canonical HOME directory. The dashboard owns HOME-scoped state (`~/.pi/agent/settings.json`, dashboard-owned per-session `.meta.json` cache files under `~/.pi/dashboard/session-meta/`, `~/.pi/dashboard/preferences.json`, `headless-pids.json`, `editor-pids.json`) that would corrupt under concurrent writers. A per-HOME advisory lock enforces this invariant at runtime; multi-user (two distinct canonical HOMEs on the same host) continues to work because each user has a distinct lock path.
 
 Implementation: `packages/server/src/home-lock.ts` (acquisition + metadata sidecar), `packages/server/src/home-lock-release.ts` (signal handlers), `packages/electron/src/lib/lock-metadata.ts` (Electron-side reader), `packages/extension/src/server-auto-start.ts::readLockMetaPort` (bridge fallback). Historical context: see `openspec/changes/archive/*-single-dashboard-per-home/`.
 

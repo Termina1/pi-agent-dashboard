@@ -282,7 +282,8 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
   // its placeholder by exact correlation. See change: spawn-correlation-token.
   const pendingClientCorrelations = createPendingClientCorrelations();
 
-  // Restore sessions from per-session .meta.json files (scans ~/.pi/agent/sessions/)
+  // Restore sessions from dashboard-owned .meta.json cache files while scanning
+  // ~/.pi/agent/sessions/ for session .jsonl files.
   const scanResult = scanAllSessions();
   for (const session of scanResult.sessions) {
     const restored = { ...session, dataUnavailable: true };
@@ -296,7 +297,7 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
     console.log(`[dashboard] Session scan: ${scanResult.sessions.length} sessions, ${scanResult.cacheUpdates} cache updates`);
   }
 
-  // Save per-session .meta.json on any change
+  // Save per-session dashboard-owned .meta.json on any change
   sessionManager.onChange = (sessionId: string, ctx) => {
     const session = sessionManager.get(sessionId);
     if (!session?.sessionFile) return;
@@ -462,7 +463,7 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
     }
   }
 
-  // Track cwds with pending dashboard-spawned sessions (for writing .meta.json).
+  // Track cwds with pending dashboard-spawned sessions (for writing dashboard-owned .meta.json).
   // Uses a counter per cwd to handle multiple spawns and avoid reconnects consuming entries.
   const pendingDashboardSpawns = new Map<string, number>();
 

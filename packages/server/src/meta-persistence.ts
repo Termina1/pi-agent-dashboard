@@ -3,7 +3,7 @@
  * Each session gets its own debounce timer — updating session A
  * does not trigger a write for session B.
  */
-import { type SessionMeta, metaPath, readSessionMeta, writeSessionMeta } from "@blackbelt-technology/pi-dashboard-shared/session-meta.js";
+import { type SessionMeta, writeSessionMeta } from "@blackbelt-technology/pi-dashboard-shared/session-meta.js";
 
 const DEBOUNCE_MS = 1000;
 
@@ -31,7 +31,11 @@ export function createMetaPersistence(): MetaPersistence {
     if (!entry) return;
     clearTimeout(entry.timer);
     pending.delete(sessionFile);
-    writeSessionMeta(sessionFile, entry.meta);
+    try {
+      writeSessionMeta(sessionFile, entry.meta);
+    } catch (err) {
+      console.error(`[meta-persistence] Failed to write session meta for ${sessionFile}:`, err);
+    }
   }
 
   return {

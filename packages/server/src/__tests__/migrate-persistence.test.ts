@@ -10,6 +10,7 @@ describe("migrate-persistence", () => {
   let tmpDir: string;
   let configDir: string;
   let sessionsDir: string;
+  const originalHome = process.env.HOME;
 
   function paths(): MigrationPaths {
     return {
@@ -24,11 +25,14 @@ describe("migrate-persistence", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "migrate-test-"));
     configDir = path.join(tmpDir, "config");
     sessionsDir = path.join(tmpDir, "sessions");
+    process.env.HOME = tmpDir;
     fs.mkdirSync(configDir, { recursive: true });
     fs.mkdirSync(sessionsDir, { recursive: true });
   });
 
   afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -145,6 +149,7 @@ describe("migrate-persistence", () => {
     const sf = createSessionFile("--test--", "2026-01-01T00-00-00-000Z_merge-id.jsonl");
     // Pre-existing .meta.json with source
     const mp = metaPath(sf);
+    fs.mkdirSync(path.dirname(mp), { recursive: true });
     fs.writeFileSync(mp, JSON.stringify({ source: "dashboard", name: "Existing" }));
 
     writeConfig("sessions.json", [{ id: "merge-id", sessionFile: sf, cwd: "/test", cost: 3.0 }]);

@@ -7,14 +7,18 @@ import { metaPath, readSessionMeta } from "@blackbelt-technology/pi-dashboard-sh
 
 describe("meta-persistence", () => {
   let tmpDir: string;
+  const originalHome = process.env.HOME;
 
   beforeEach(() => {
     vi.useFakeTimers();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "meta-persist-test-"));
+    process.env.HOME = tmpDir;
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -103,5 +107,26 @@ describe("meta-persistence", () => {
     mp.dispose();
     vi.advanceTimersByTime(2000);
     expect(fs.existsSync(metaPath(sf))).toBe(false);
+  });
+
+  it("should swallow write errors and log them", () => {
+    const mp = createMetaPersistence();
+    const sf = sessionFile("a");
+    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementationOnce(() => {
+      throw new Error("boom");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    mp.save(sf, { source: "dashboard" });
+    expect(() => vi.advanceTimersByTime(1000)).not.toThrow();
+    expect(errorSpy).toHaveBeenCalledWith(
+      `[meta-persistence] Failed to write session meta for ${sf}:`,
+      expect.any(Error),
+    );
+    expect(fs.existsSync(metaPath(sf))).toBe(false);
+
+    renameSpy.mockRestore();
+    errorSpy.mockRestore();
+    mp.dispose();
   });
 });

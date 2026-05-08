@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { scanAllSessions } from "../session-scanner.js";
-import { metaPath, writeSessionMeta } from "@blackbelt-technology/pi-dashboard-shared/session-meta.js";
+import { legacyMetaPath, metaPath, writeSessionMeta } from "@blackbelt-technology/pi-dashboard-shared/session-meta.js";
 
 // Mock extractSessionStats to avoid needing real JSONL content with usage data
 vi.mock("../session-stats-reader.js", () => ({
@@ -22,12 +22,16 @@ vi.mock("../session-stats-reader.js", () => ({
 
 describe("session-scanner", () => {
   let tmpDir: string;
+  const originalHome = process.env.HOME;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "scanner-test-"));
+    process.env.HOME = tmpDir;
   });
 
   afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -59,7 +63,7 @@ describe("session-scanner", () => {
     expect(result.sessions).toEqual([]);
   });
 
-  it("should discover session from .meta.json with cached data", () => {
+  it("should discover session from cached .meta.json data", () => {
     const dir = createSessionDir("--test-cwd--");
     const sf = createJsonl(dir, "2026-03-30T21-39-43-034Z_abc-123.jsonl", { id: "abc-123", cwd: "/test/cwd" });
     writeSessionMeta(sf, {
@@ -83,7 +87,7 @@ describe("session-scanner", () => {
     expect(result.cacheUpdates).toBe(0); // no re-extraction needed
   });
 
-  it("should fall back to .jsonl parsing when no .meta.json exists", () => {
+  it("should fall back to .jsonl parsing when no cached .meta.json exists", () => {
     const dir = createSessionDir("--test-cwd--");
     createJsonl(dir, "2026-03-30T21-39-43-034Z_def-456.jsonl", { id: "def-456", cwd: "/fallback/cwd" });
 
@@ -95,13 +99,13 @@ describe("session-scanner", () => {
     expect(result.cacheUpdates).toBe(1); // wrote new .meta.json
   });
 
-  it("should write .meta.json for uncached sessions", () => {
+  it("should write dashboard-owned .meta.json for uncached sessions", () => {
     const dir = createSessionDir("--test-cwd--");
     const sf = createJsonl(dir, "2026-03-30T21-39-43-034Z_ghi-789.jsonl", { id: "ghi-789", cwd: "/new/cwd" });
 
     scanAllSessions(tmpDir);
 
-    // .meta.json should now exist
+    // dashboard-owned .meta.json should now exist
     expect(fs.existsSync(metaPath(sf))).toBe(true);
     const meta = JSON.parse(fs.readFileSync(metaPath(sf), "utf-8"));
     expect(meta.cwd).toBe("/new/cwd");
@@ -140,10 +144,9 @@ describe("session-scanner", () => {
   });
 
   it("should ignore orphaned .meta.json without .jsonl", () => {
-    const dir = createSessionDir("--test-cwd--");
-    // Write .meta.json without a corresponding .jsonl
-    const orphanedMeta = path.join(dir, "2026-03-30T21-39-43-034Z_orphan-id.meta.json");
-    fs.writeFileSync(orphanedMeta, JSON.stringify({ cwd: "/ghost", source: "dashboard" }));
+    const sessionFile = path.join(tmpDir, "ghost.jsonl");
+    fs.mkdirSync(path.dirname(metaPath(sessionFile)), { recursive: true });
+    fs.writeFileSync(metaPath(sessionFile), JSON.stringify({ cwd: "/ghost", source: "dashboard" }));
 
     const result = scanAllSessions(tmpDir);
     expect(result.sessions).toHaveLength(0);
@@ -213,6 +216,19 @@ describe("session-scanner", () => {
     const meta = JSON.parse(fs.readFileSync(metaPath(sf), "utf-8"));
     expect(meta.source).toBe("dashboard");
     expect(meta.cwd).toBe("/test");
+  });
+
+  it("should migrate legacy sidecars into the dashboard-owned cache path", () => {
+    const dir = createSessionDir("--test-cwd--");
+    const sf = createJsonl(dir, "2026-03-30T21-39-43-034Z_legacy-id.jsonl", { id: "legacy-id", cwd: "/legacy" });
+    fs.writeFileSync(legacyMetaPath(sf), JSON.stringify({ cwd: "/legacy", name: "Legacy", cachedAt: Date.now() + 10_000 }) + "\n");
+
+    const result = scanAllSessions(tmpDir);
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].name).toBe("Legacy");
+    expect(fs.existsSync(metaPath(sf))).toBe(true);
+    expect(fs.existsSync(legacyMetaPath(sf))).toBe(false);
+    expect(result.cacheUpdates).toBe(1);
   });
 
   it("should preserve persisted contextWindow over inferred stats value when model unchanged", () => {

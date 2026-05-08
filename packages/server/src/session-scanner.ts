@@ -1,13 +1,14 @@
 /**
  * Session scanner — discovers all sessions by scanning
- * `~/.pi/agent/sessions/` and reading `.meta.json` sidecars.
+ * `~/.pi/agent/sessions/` for `.jsonl` files and reading dashboard-owned
+ * `.meta.json` cache files keyed by session path.
  * Falls back to `.jsonl` parsing for sessions without cached meta.
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
 import type { DashboardSession, SessionSource } from "@blackbelt-technology/pi-dashboard-shared/types.js";
-import { type SessionMeta, metaPath, readSessionMeta, writeSessionMeta } from "@blackbelt-technology/pi-dashboard-shared/session-meta.js";
+import { type SessionMeta, metaPath, moveLegacySessionMeta, readSessionMeta, writeSessionMeta } from "@blackbelt-technology/pi-dashboard-shared/session-meta.js";
 import { condenseForFirstMessage } from "@blackbelt-technology/pi-dashboard-shared/skill-block-parser.js";
 import { extractSessionStats } from "./session-stats-reader.js";
 
@@ -100,8 +101,8 @@ export interface ScanResult {
 
 /**
  * Scan all session directories and return DashboardSession[] from cached meta.
- * For sessions without .meta.json or with stale cache, falls back to .jsonl parsing
- * and writes .meta.json for next time.
+ * For sessions without dashboard-owned `.meta.json` (or with stale cache), fall
+ * back to `.jsonl` parsing and write fresh dashboard-owned metadata for next time.
  */
 export function scanAllSessions(sessionsDir?: string): ScanResult {
   const dir = sessionsDir ?? getSessionsDir();
@@ -134,7 +135,14 @@ export function scanAllSessions(sessionsDir?: string): ScanResult {
       const sessionDir = cwdPath;
       const startedAt = extractTimestamp(jsonlFile);
 
-      // Try reading .meta.json
+      // Try reading cached session metadata. Older dashboard versions wrote a
+      // legacy sidecar next to the .jsonl; readSessionMeta() still falls back to
+      // that path. If we only found legacy metadata, migrate it forward by
+      // rewriting it into the dashboard-owned cache path.
+      const migratedLegacy = moveLegacySessionMeta(sessionFile);
+      if (migratedLegacy) {
+        cacheUpdates++;
+      }
       const meta = readSessionMeta(sessionFile);
 
       if (meta && meta.cwd) {

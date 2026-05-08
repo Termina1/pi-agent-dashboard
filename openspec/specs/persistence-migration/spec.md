@@ -11,12 +11,12 @@ The system SHALL automatically migrate from `sessions.json` + `state.json` to th
 - **WHEN** the server starts and neither `sessions.json` nor `state.json` exists
 - **THEN** the system SHALL skip migration and proceed with normal startup
 
-### Requirement: Session data migrated to meta files
-The migration SHALL read `sessions.json` and write a `.meta.json` sidecar for each session that has a valid `sessionFile` path pointing to an existing `.jsonl` file.
+### Requirement: Session data migrated to dashboard-owned meta files
+The migration SHALL read `sessions.json` and write a dashboard-owned `.meta.json` file under `~/.pi/dashboard/session-meta/` for each session that has a valid `sessionFile` path pointing to an existing `.jsonl` file.
 
 #### Scenario: Session with valid session file
 - **WHEN** a session in `sessions.json` has a `sessionFile` pointing to an existing `.jsonl`
-- **THEN** the migration SHALL write a `.meta.json` next to that `.jsonl` with all dashboard-owned fields and cached stats
+- **THEN** the migration SHALL write a dashboard-owned `.meta.json` with all dashboard-owned fields and cached stats
 
 #### Scenario: Session with missing or invalid session file
 - **WHEN** a session in `sessions.json` has no `sessionFile` or points to a non-existent file

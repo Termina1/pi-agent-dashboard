@@ -241,7 +241,7 @@ This section lists only the **architectural backbone** — the files agents touc
 | `src/extension/prompt-expander.ts` | Slash command → prompt template expansion |
 | `src/extension/dev-build.ts` | Dev build-on-reload helper (client build + server shutdown) |
 | `src/extension/server-auto-start.ts` | mDNS-first → health check → auto-start with concurrent launch detection |
-| `src/shared/session-meta.ts` | Session metadata sidecar (.meta.json) read/write helpers |
+| `src/shared/session-meta.ts` | Dashboard-owned session metadata (.meta.json) read/write helpers |
 | `src/extension/process-metrics.ts` | Lightweight CPU/memory/event-loop metrics for heartbeats |
 | `src/extension/process-scanner.ts` | Child process detection via ps + PGID tracking and PGID-based kill |
 | `src/client/components/ProcessList.tsx` | Session card process list with elapsed time and kill button |
@@ -355,7 +355,7 @@ This section lists only the **architectural backbone** — the files agents touc
 | `src/server/routes/package-routes.ts` | REST routes: search, readme, installed, install, remove, update, check-updates |
 | `src/client/components/SortablePinnedGroup.tsx` | Drag-to-reorder wrapper for pinned directory groups |
 | `src/server/preferences-store.ts` | Global UI preferences (pinned dirs, session order) in `preferences.json` |
-| `src/server/meta-persistence.ts` | Per-session debounced `.meta.json` writer |
+| `src/server/meta-persistence.ts` | Per-session debounced dashboard-owned `.meta.json` writer |
 | `src/server/session-scanner.ts` | Startup session discovery scanning `~/.pi/agent/sessions/` |
 | `src/server/migrate-persistence.ts` | One-time migration from `sessions.json` + `state.json` to `.meta.json` |
 | `src/server/session-order-manager.ts` | Per-cwd session ordering with persistence; `moveToFront` semantic |

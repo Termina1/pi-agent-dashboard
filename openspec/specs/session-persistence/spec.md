@@ -1,14 +1,14 @@
 ## ADDED Requirements
 
 ### Requirement: Visible sessions persist across restarts
-The system SHALL persist session metadata in per-session `.meta.json` sidecar files next to each session's `.jsonl` file. On startup, the system SHALL discover sessions by scanning `~/.pi/agent/sessions/*/` and restoring from `.meta.json` cached data.
+The system SHALL persist session metadata in dashboard-owned per-session `.meta.json` files under `~/.pi/dashboard/session-meta/`, keyed by each session's `.jsonl` path. On startup, the system SHALL discover sessions by scanning `~/.pi/agent/sessions/*/` for `.jsonl` files and restoring cached data from the dashboard-owned `.meta.json` store.
 
 #### Scenario: Server restarts with ended sessions
 - **WHEN** the server has ended sessions with `.meta.json` files and the server restarts
 - **THEN** those sessions SHALL be discovered by filesystem scan and appear in the session list with `dataUnavailable: true`
 
 #### Scenario: Server restarts with no session files
-- **WHEN** the server starts and no `.meta.json` files exist under `~/.pi/agent/sessions/`
+- **WHEN** the server starts and no cached `.meta.json` files exist under `~/.pi/dashboard/session-meta/`
 - **THEN** the server SHALL start with an empty session list (no errors)
 
 #### Scenario: Active session bridge reconnects after restart

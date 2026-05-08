@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
-### Requirement: Per-session sidecar stores dashboard state
-The system SHALL store all dashboard-owned per-session state in a `.meta.json` sidecar file next to the session's `.jsonl` file. The `.meta.json` filename SHALL match the `.jsonl` filename with the extension replaced.
+### Requirement: Dashboard-owned per-session meta store persists dashboard state
+The system SHALL store all dashboard-owned per-session state in a dashboard-owned `.meta.json` file under `~/.pi/dashboard/session-meta/`, keyed by the session's `.jsonl` path. The on-disk filename MAY be hashed or otherwise derived from the `.jsonl` path, but it SHALL be stable for a given session file path.
 
 #### Scenario: Dashboard-owned fields persisted
 - **WHEN** a session has dashboard-set properties (name, attachedProposal, hidden, source)
@@ -11,9 +11,10 @@ The system SHALL store all dashboard-owned per-session state in a `.meta.json` s
 - **WHEN** a session accumulates stats (tokens, cost, model, status, timestamps, context usage)
 - **THEN** those stats SHALL be cached in the session's `.meta.json` file
 
-#### Scenario: Meta file co-located with session file
+#### Scenario: Meta file lives under the dashboard-owned cache root
 - **WHEN** a session file exists at `~/.pi/agent/sessions/<cwd>/<ts>_<uuid>.jsonl`
-- **THEN** the meta file SHALL be at `~/.pi/agent/sessions/<cwd>/<ts>_<uuid>.meta.json`
+- **THEN** the meta file SHALL live under `~/.pi/dashboard/session-meta/`
+- **AND** the mapping from session file path to meta file path SHALL be deterministic
 
 ### Requirement: All meta fields are optional
 The system SHALL treat all fields in `.meta.json` as optional. A minimal file with only `{ "source": "dashboard" }` SHALL be valid and backward-compatible with existing sidecar files.
@@ -49,10 +50,10 @@ The system SHALL use atomic write operations (write-to-temp + rename) for `.meta
 - **THEN** the previous valid version SHALL remain intact
 
 ### Requirement: Session discovery by filesystem scan
-The system SHALL discover sessions at startup by scanning all subdirectories under `~/.pi/agent/sessions/`. For each `.meta.json` file with a corresponding `.jsonl` file, the system SHALL restore the session from cached data.
+The system SHALL discover sessions at startup by scanning all subdirectories under `~/.pi/agent/sessions/` for `.jsonl` files. For each `.jsonl`, the system SHALL look up its dashboard-owned `.meta.json` cache entry and restore the session from cached data when present.
 
 #### Scenario: Startup with cached meta files
-- **WHEN** the server starts and `.meta.json` files exist with cached stats
+- **WHEN** the server starts and dashboard-owned `.meta.json` files exist with cached stats
 - **THEN** sessions SHALL be restored from `.meta.json` without parsing `.jsonl` files
 
 #### Scenario: Session file without meta file
@@ -60,7 +61,7 @@ The system SHALL discover sessions at startup by scanning all subdirectories und
 - **THEN** the system SHALL read the `.jsonl` header for session identity (id, cwd) and optionally extract stats, then write a `.meta.json` for future startups
 
 #### Scenario: Orphaned meta file without session file
-- **WHEN** a `.meta.json` file exists without a corresponding `.jsonl` file
+- **WHEN** a dashboard-owned `.meta.json` file exists for a session path whose `.jsonl` file no longer exists
 - **THEN** the system SHALL ignore the orphaned `.meta.json`
 
 #### Scenario: All directories scanned regardless of pin status

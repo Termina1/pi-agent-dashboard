@@ -8,10 +8,10 @@ import { readSessionMeta } from "@blackbelt-technology/pi-dashboard-shared/sessi
  * @param hasUI - Whether the pi session has a UI (TUI). When true and ZED_TERM
  *   is set, it means pi TUI is running inside Zed's terminal (not Zed's agent).
  * @param sessionFile - Path to the session's .jsonl file, used to check for
- *   a .meta.json sidecar with source information.
+ *   dashboard-owned persisted metadata with source information.
  */
 export function detectSessionSource(hasUI?: boolean, sessionFile?: string): SessionSource {
-  // Check for .meta.json sidecar written by the dashboard server
+  // Check persisted session metadata written by the dashboard server
   if (sessionFile) {
     const meta = readSessionMeta(sessionFile);
     if (meta?.source === "dashboard") return "dashboard";

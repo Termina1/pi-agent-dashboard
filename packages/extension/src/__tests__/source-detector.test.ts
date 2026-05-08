@@ -13,6 +13,7 @@ describe("detectSessionSource", () => {
     delete process.env.ZED_TERM;
     delete process.env.TMUX;
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "source-detect-test-"));
+    process.env.HOME = tmpDir;
   });
 
   afterEach(() => {

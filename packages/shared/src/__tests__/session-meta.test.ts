@@ -2,23 +2,34 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { metaPath, readSessionMeta, writeSessionMeta, mergeSessionMeta } from "../session-meta.js";
+import { legacyMetaPath, metaPath, moveLegacySessionMeta, readSessionMeta, writeSessionMeta, mergeSessionMeta } from "../session-meta.js";
 
 describe("session-meta", () => {
   let tmpDir: string;
+  const originalHome = process.env.HOME;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "session-meta-test-"));
+    process.env.HOME = tmpDir;
   });
 
   afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   describe("metaPath", () => {
-    it("should derive .meta.json from .jsonl path", () => {
+    it("should derive a dashboard-owned .meta.json path from a .jsonl path", () => {
       const sessionFile = "/home/user/.pi/sessions/cwd/2026-01-01T00-00-00-000Z_abc123.jsonl";
-      expect(metaPath(sessionFile)).toBe(
+      expect(metaPath(sessionFile)).toMatch(
+        new RegExp(`${tmpDir}/\\.pi/dashboard/session-meta/[0-9a-f]{2}/2026-01-01T00-00-00-000Z_abc123\\.[0-9a-f]{16}\\.meta\\.json$`)
+      );
+    });
+
+    it("should expose the legacy sidecar path for backward compatibility", () => {
+      const sessionFile = "/home/user/.pi/sessions/cwd/2026-01-01T00-00-00-000Z_abc123.jsonl";
+      expect(legacyMetaPath(sessionFile)).toBe(
         "/home/user/.pi/sessions/cwd/2026-01-01T00-00-00-000Z_abc123.meta.json"
       );
     });
@@ -39,8 +50,27 @@ describe("session-meta", () => {
 
     it("should return undefined for invalid JSON", () => {
       const sessionFile = path.join(tmpDir, "bad.jsonl");
-      fs.writeFileSync(path.join(tmpDir, "bad.meta.json"), "not json");
+      fs.mkdirSync(path.dirname(metaPath(sessionFile)), { recursive: true });
+      fs.writeFileSync(metaPath(sessionFile), "not json");
       expect(readSessionMeta(sessionFile)).toBeUndefined();
+    });
+
+    it("should fall back to the legacy sidecar path on read", () => {
+      const sessionFile = path.join(tmpDir, "legacy.jsonl");
+      fs.mkdirSync(path.dirname(legacyMetaPath(sessionFile)), { recursive: true });
+      fs.writeFileSync(legacyMetaPath(sessionFile), JSON.stringify({ source: "dashboard", name: "Legacy" }) + "\n");
+      expect(readSessionMeta(sessionFile)).toEqual({ source: "dashboard", name: "Legacy" });
+    });
+
+    it("should move a legacy sidecar into the dashboard-owned path", () => {
+      const sessionFile = path.join(tmpDir, "legacy-move.jsonl");
+      fs.mkdirSync(path.dirname(legacyMetaPath(sessionFile)), { recursive: true });
+      fs.writeFileSync(legacyMetaPath(sessionFile), JSON.stringify({ source: "dashboard", name: "Legacy" }) + "\n");
+
+      expect(moveLegacySessionMeta(sessionFile)).toBe(true);
+      expect(fs.existsSync(metaPath(sessionFile))).toBe(true);
+      expect(fs.existsSync(legacyMetaPath(sessionFile))).toBe(false);
+      expect(readSessionMeta(sessionFile)).toEqual({ source: "dashboard", name: "Legacy" });
     });
 
     it("should write and read expanded fields", () => {
@@ -115,6 +145,7 @@ describe("session-meta", () => {
       const sessionFile = path.join(tmpDir, "unknown.jsonl");
       // Write a file with an unknown field
       const p = metaPath(sessionFile);
+      fs.mkdirSync(path.dirname(p), { recursive: true });
       fs.writeFileSync(p, JSON.stringify({ source: "dashboard", customField: 42 }) + "\n");
       mergeSessionMeta(sessionFile, { name: "Test" });
       const raw = JSON.parse(fs.readFileSync(p, "utf-8"));

@@ -28,7 +28,7 @@ PI Dashboard: web-based dashboard for monitoring + interacting with pi agent ses
 
 ### 1. Bridge Extension (`src/extension/`)
 Global pi extension running in every pi session. It:
-- Detects session source (TUI, Zed, tmux, dashboard-spawned) via `.meta.json` sidecar files + env vars
+- Detects session source (TUI, Zed, tmux, dashboard-spawned) via dashboard-owned `.meta.json` cache files + env vars
 - Forwards all pi events to dashboard server via WebSocket
 - Relays commands from dashboard back to pi
 - Handles reconnection with exponential backoff + event buffering
@@ -61,7 +61,7 @@ Node.js HTTP + WebSocket server that:
 - Polls OpenSpec CLI per directory every 30s, broadcasting changes to browsers (DirectoryService).
   - **Design-artifact override**: after CLI's per-change `status`, `buildOpenSpecData` post-processes `design` artifact: when CLI says `design: ready`, dashboard checks local fs evidence (R1: `^design.*\.md$` present; R2: `design/*.md` present; R3: `tasks.md` contains Markdown checkbox) + promotes `design.status` to `"done"` if any rule fires. **Promote-only + design-only** — never demotes, never touches other artifact ids, never promotes from `"blocked"`. Change-level `isComplete` re-derived locally; CLI `isComplete: true` never demoted. Same R1/R2/R3 mirrored in `.pi/skills/openspec-shared/scripts/effective-status.sh` so OpenSpec workflow skills + dashboard session-card buttons cannot disagree about next-ready artifact. See change: fix-openspec-design-detection.
 - Serves the built web client as static files (production) or proxies to Vite dev server (dev mode)
-- Writes per-session `.meta.json` sidecar files with dashboard state and cached stats
+- Writes per-session dashboard-owned `.meta.json` cache files with dashboard state and cached stats
 - Exposes REST API for session management, event content fetch, pinned directories, and file reading
 - Provides session control REST endpoints (`/api/session/:id/*`) wrapping WebSocket-only operations (prompt, abort, spawn, resume, rename, hide, flow-control, model, thinking-level, attach/detach-proposal) — see `src/server/session-api.ts`
 
@@ -968,8 +968,8 @@ The per-message ⤘ Fork button needs each chat bubble to carry the entry id of 
 | Data | Storage | Details |
 |------|---------|---------|
 | Events | In-memory Map | LRU eviction, max 100 sessions. Pinned if active bridge or browser subscribers. |
-| Sessions | In-memory Map + `.meta.json` | In-memory registry. Each session's state cached in per-session `.meta.json` sidecar next to `.jsonl`. On startup, `session-scanner.ts` scans `~/.pi/agent/sessions/*/` to restore all sessions from cached meta. |
-| Session meta | `~/.pi/agent/sessions/…/<id>.meta.json` | Per-session sidecar: dashboard-owned state (name, attachedProposal, hidden, source) + cached stats (tokens, cost, model, status). Debounced per-session writes (max 1/sec). Stale cache detected via `cachedAt` vs `.jsonl` mtime. |
+| Sessions | In-memory Map + `.meta.json` | In-memory registry. Each session's state cached in per-session dashboard-owned `.meta.json` files under `~/.pi/dashboard/session-meta/`, keyed by session `.jsonl` path. On startup, `session-scanner.ts` scans `~/.pi/agent/sessions/*/` for `.jsonl` files and restores cached meta for each discovered session. |
+| Session meta | `~/.pi/dashboard/session-meta/.../*.meta.json` | Per-session dashboard-owned cache file: name, attachedProposal, hidden, source, unread, and cached stats (tokens, cost, model, status). Debounced per-session writes (max 1/sec). Stale cache detected via `cachedAt` vs `.jsonl` mtime. Legacy sidecars next to `.jsonl` are read for backward compatibility only. |
 | Pinned directories | `~/.pi/dashboard/preferences.json` | Ordered array of cwd paths. Pinned dirs always visible in sidebar. |
 | Session order | `~/.pi/dashboard/preferences.json` | Per-cwd ordering managed by `session-order-manager.ts`. |
 | Server PID | `~/.pi/dashboard/server.pid` | Tracks running server process for daemon management. |
