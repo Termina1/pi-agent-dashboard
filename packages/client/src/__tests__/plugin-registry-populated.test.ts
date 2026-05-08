@@ -9,12 +9,12 @@
  * UX regression with no compile error.
  *
  * Behaviour:
- *   - On a clean tree (pre-build), the committed stub exports
- *     `PLUGIN_REGISTRY = []`. The test detects this and SKIPS so
- *     `npm test` works without forcing a full `npm run build` first.
- *   - After `npm run build` (CI runs build before test), the generated
- *     file is overwritten with the real registry. The test asserts:
- *     • Every entry has at least one claim.
+ *   - The generated registry is committed, so a fresh checkout already
+ *     contains the current plugin claims.
+ *   - Dev start / build regenerates it deterministically from workspace
+ *     plugin manifests using stable import specifiers.
+ *   - The test asserts:
+ *     • The registry contains at least one claim overall.
  *     • Every claim's `slot` is in the known SLOT_DEFINITIONS set.
  *     • At least one entry's manifest id matches a workspace package
  *       directory under `packages/`.
@@ -52,11 +52,6 @@ function workspacePluginManifestCount(): number {
 const KNOWN_SLOTS = new Set(Object.keys(SLOT_DEFINITIONS));
 
 describe("plugin-registry-populated", () => {
-  if (PLUGIN_REGISTRY.length === 0) {
-    it.skip("generated registry empty — run `npm run build` first to populate it", () => {});
-    return;
-  }
-
   it("at least one entry has at least one claim", () => {
     // Some plugins may ship a manifest with `claims: []` (e.g. flows-plugin
     // during the wire-plugin-registry-into-shell scope-down, where its

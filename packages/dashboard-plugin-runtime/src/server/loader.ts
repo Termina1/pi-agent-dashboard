@@ -17,6 +17,8 @@ import { createPluginStatusStore, type PluginStatusStore } from "./plugin-status
 export interface DiscoveredPlugin {
   manifest: PluginManifest;
   packageDir: string;
+  /** npm package name from package.json (used for stable client import specifiers). */
+  packageName?: string;
   /** Absolute path to the server entry (if declared and resolved). */
   serverEntryPath?: string;
   /** Absolute path to the bridge entry (if declared and resolved). */
@@ -98,6 +100,7 @@ export function discoverPlugins(repoRoot?: string): DiscoveredPlugin[] {
     results.push({
       manifest,
       packageDir: pkgDir,
+      packageName: typeof raw.name === "string" ? raw.name : undefined,
       serverEntryPath: resolve(manifest.server),
       bridgeEntryPath: resolve(manifest.bridge),
       clientEntryPath: resolve(manifest.client),

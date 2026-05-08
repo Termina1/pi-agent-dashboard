@@ -84,9 +84,9 @@ import { createSlotRegistry } from "@blackbelt-technology/dashboard-plugin-runti
 import { PLUGIN_REGISTRY } from "./generated/plugin-registry.js";
 
 // Populate the slot registry from the build-time generated plugin manifest.
-// PLUGIN_REGISTRY is `[]` on a fresh checkout (committed stub) — slot consumers
-// then render zero contributions, which is fine. The vite plugin overwrites the
-// generated file on dev start and on every build.
+// The registry file is committed and regenerated on dev start + every build.
+// Its import specifiers are stable (package names first, repo-relative fallback)
+// so content changes only when plugin manifests/claims change, not per machine.
 const _pluginRegistry = createSlotRegistry();
 for (const entry of PLUGIN_REGISTRY) {
   for (const claim of entry.claims) {

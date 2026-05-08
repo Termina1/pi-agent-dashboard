@@ -26,18 +26,20 @@ afterEach(() => {
   clearDiscoveryCache();
 });
 
-function writePlugin(name: string, manifest: Record<string, unknown>) {
-  const pkgDir = path.join(tmpDir, "packages", name);
+function writePlugin(name: string | undefined, manifest: Record<string, unknown>) {
+  const dirName = name ?? `plugin-${Math.random().toString(36).slice(2, 8)}`;
+  const pkgDir = path.join(tmpDir, "packages", dirName);
   fs.mkdirSync(pkgDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(pkgDir, "package.json"),
-    JSON.stringify({ name, "pi-dashboard-plugin": manifest }),
-  );
+  const pkgJson = name
+    ? { name, "pi-dashboard-plugin": manifest }
+    : { "pi-dashboard-plugin": manifest };
+  fs.writeFileSync(path.join(pkgDir, "package.json"), JSON.stringify(pkgJson));
 }
 
-async function invokePlugin(isProd = false): Promise<string> {
-  const oldEnv = process.env.NODE_ENV;
-  if (isProd) process.env.NODE_ENV = "production";
+async function invokePlugin(opts?: { includeFixtures?: boolean }): Promise<string> {
+  const oldIncludeFixtures = process.env.PI_DASHBOARD_INCLUDE_FIXTURES;
+  if (opts?.includeFixtures) process.env.PI_DASHBOARD_INCLUDE_FIXTURES = "1";
+  else delete process.env.PI_DASHBOARD_INCLUDE_FIXTURES;
   try {
     const { viteDashboardPluginsPlugin } = await import("../vite-plugin/index.js");
     const plugin = viteDashboardPluginsPlugin(tmpDir);
@@ -47,13 +49,14 @@ async function invokePlugin(isProd = false): Promise<string> {
     const outPath = path.join(tmpDir, "packages", "client", "src", "generated", "plugin-registry.tsx");
     return fs.existsSync(outPath) ? fs.readFileSync(outPath, "utf-8") : "";
   } finally {
-    process.env.NODE_ENV = oldEnv;
+    if (oldIncludeFixtures === undefined) delete process.env.PI_DASHBOARD_INCLUDE_FIXTURES;
+    else process.env.PI_DASHBOARD_INCLUDE_FIXTURES = oldIncludeFixtures;
     clearDiscoveryCache();
   }
 }
 
 describe("viteDashboardPluginsPlugin", () => {
-  it("generates registry with named imports for claimed components", async () => {
+  it("generates registry with named imports for claimed components using stable package specifiers", async () => {
     writePlugin("openspec-plugin", {
       id: "openspec",
       displayName: "OpenSpec",
@@ -69,11 +72,28 @@ describe("viteDashboardPluginsPlugin", () => {
     // Should use named imports, not import *
     expect(content).toContain("import { OpenSpecBadge, OpenSpecSettings }");
     expect(content).not.toContain("import * as");
+    expect(content).toContain('from "openspec-plugin/client"');
+    expect(content).not.toMatch(/from\s+"\/[^"]+"/);
     expect(content).toContain("PLUGIN_REGISTRY");
     expect(content).toContain('"openspec"');
   });
 
-  it("skips fixture plugins in production", async () => {
+  it("falls back to repo-relative imports when package name is unavailable", async () => {
+    writePlugin(undefined, {
+      id: "local-only",
+      displayName: "Local Only",
+      priority: 100,
+      client: "./dist/client/index.js",
+      claims: [{ slot: "session-card-badge", component: "LocalOnlyBadge" }],
+    });
+
+    const content = await invokePlugin();
+    expect(content).toContain('from "../../../plugin-');
+    expect(content).toContain('/dist/client/index.js"');
+    expect(content).not.toMatch(/from\s+"\/[^"]+"/);
+  });
+
+  it("skips fixture plugins by default", async () => {
     writePlugin("demo-plugin", {
       id: "demo",
       displayName: "Demo",
@@ -82,10 +102,23 @@ describe("viteDashboardPluginsPlugin", () => {
       claims: [{ slot: "session-card-badge", component: "DemoBadge" }],
     });
 
-    const content = await invokePlugin(true);
-    // demo plugin should not appear in production bundle
+    const content = await invokePlugin();
     expect(content).not.toContain("demo");
     expect(content).not.toContain("DemoBadge");
+  });
+
+  it("includes fixture plugins when explicitly opted in", async () => {
+    writePlugin("demo-plugin", {
+      id: "demo",
+      displayName: "Demo",
+      fixture: true,
+      client: "./dist/client/index.js",
+      claims: [{ slot: "session-card-badge", component: "DemoBadge" }],
+    });
+
+    const content = await invokePlugin({ includeFixtures: true });
+    expect(content).toContain('from "demo-plugin/client"');
+    expect(content).toContain("DemoBadge");
   });
 
   it("does not regenerate when manifest content hasn't changed", async () => {
