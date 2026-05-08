@@ -29,10 +29,13 @@ source: —
 path:   —
 tried:
   override     no override set
+  bare-import  cannot resolve @earendil-works/pi-coding-agent/package.json
   bare-import  cannot resolve @mariozechner/pi-coding-agent/package.json
   bare-import  cannot resolve @oh-my-pi/pi-coding-agent/package.json
+  managed      missing: <HOME>/.pi-dashboard/node_modules/@earendil-works/pi-coding-agent/dist/cli.js
   managed      missing: <HOME>/.pi-dashboard/node_modules/@mariozechner/pi-coding-agent/dist/cli.js
   managed      missing: <HOME>/.pi-dashboard/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js
+  npm-global   missing: <NPM_ROOT>/@earendil-works/pi-coding-agent/dist/cli.js
   npm-global   missing: <NPM_ROOT>/@mariozechner/pi-coding-agent/dist/cli.js
   npm-global   missing: <NPM_ROOT>/@oh-my-pi/pi-coding-agent/dist/cli.js
   managed      missing: <HOME>/.pi-dashboard/node_modules/.bin/pi.cmd
@@ -66,8 +69,10 @@ source: managed
 path:   <HOME>/.pi-dashboard/node_modules/@mariozechner/pi-coding-agent/dist/cli.js
 tried:
   override     no override set
+  bare-import  cannot resolve @earendil-works/pi-coding-agent/package.json
   bare-import  cannot resolve @mariozechner/pi-coding-agent/package.json
   bare-import  cannot resolve @oh-my-pi/pi-coding-agent/package.json
+  managed      missing: <HOME>/.pi-dashboard/node_modules/@earendil-works/pi-coding-agent/dist/cli.js
   managed      ok"
 `;
 

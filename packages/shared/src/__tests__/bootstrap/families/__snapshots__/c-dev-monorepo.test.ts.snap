@@ -29,5 +29,6 @@ source: bare-import
 path:   dist/cli.js
 tried:
   override     no override set
+  bare-import  cannot resolve @earendil-works/pi-coding-agent/package.json
   bare-import  ok"
 `;

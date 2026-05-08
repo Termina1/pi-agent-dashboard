@@ -31,7 +31,9 @@ export function PushNotificationsSection() {
     /iPad|iPhone|iPod/.test(navigator.userAgent);
   const isStandalone =
     typeof window !== "undefined" &&
-    (window.matchMedia("(display-mode: standalone)").matches ||
+    (((typeof window.matchMedia === "function"
+      ? window.matchMedia("(display-mode: standalone)").matches
+      : false)) ||
       (navigator as any).standalone === true);
 
   const fetchTokens = useCallback(async () => {

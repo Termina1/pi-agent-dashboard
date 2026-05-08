@@ -95,11 +95,13 @@ describe("node: managed-runtime strategy precedence", () => {
     const r = freshRegistry({
       platform: "linux",
       exists: () => false,
-      which: (name) => (name === "node" ? "/usr/bin/node" : null),
+      // Avoid process.execPath so the AppImage self-hit guard does not
+      // intentionally reject the candidate in this environment.
+      which: (name) => (name === "node" ? "/opt/system/bin/node" : null),
     });
     const res = r.resolve("node");
     expect(res.ok).toBe(true);
-    expect(res.path).toBe("/usr/bin/node");
+    expect(res.path).toBe("/opt/system/bin/node");
     expect(res.source).toBe("system");
   });
 
@@ -156,11 +158,11 @@ describe("npm: managed-runtime strategy precedence", () => {
     const r = freshRegistry({
       platform: "linux",
       exists: () => false,
-      which: (name) => (name === "npm" ? "/usr/bin/npm" : null),
+      which: (name) => (name === "npm" ? "/opt/system/bin/npm" : null),
     });
     const res = r.resolve("npm");
     expect(res.ok).toBe(true);
-    expect(res.path).toBe("/usr/bin/npm");
+    expect(res.path).toBe("/opt/system/bin/npm");
     expect(res.source).toBe("system");
   });
 });

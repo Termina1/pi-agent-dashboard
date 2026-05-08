@@ -104,16 +104,17 @@ describe("pi binary definition", () => {
 });
 
 describe("pi-coding-agent module definition", () => {
-  it("probes both @mariozechner and @oh-my-pi alias names", () => {
+  it("probes all supported pi-coding-agent alias names", () => {
     const r = freshRegistry({ exists: () => false });
     const res = r.resolve("pi-coding-agent");
     const names = res.tried.map((t) => t.strategy);
-    // First strategy: override. Then two bare-import (one per alias),
-    // then two managed, then two npm-global.
+    // First strategy: override. Then three bare-import / managed /
+    // npm-global probes — one each for @earendil-works, @mariozechner,
+    // and @oh-my-pi.
     expect(names[0]).toBe("override");
-    expect(names.filter((n) => n === "bare-import").length).toBe(2);
-    expect(names.filter((n) => n === "managed").length).toBe(2);
-    expect(names.filter((n) => n === "npm-global").length).toBe(2);
+    expect(names.filter((n) => n === "bare-import").length).toBe(3);
+    expect(names.filter((n) => n === "managed").length).toBe(3);
+    expect(names.filter((n) => n === "npm-global").length).toBe(3);
   });
 
   it("managed strategy hits ~/.pi-dashboard/node_modules/<pkg>/dist/index.js", () => {

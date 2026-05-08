@@ -83,7 +83,7 @@ describe("PiCoreChecker.getStatus", () => {
 		expect(status.packages.find((p) => p.name === "pi-web-access")).toBeUndefined();
 
 		const pi = status.packages.find((p) => p.name === "@mariozechner/pi-coding-agent")!;
-		expect(pi.displayName).toBe("pi (core agent)");
+		expect(pi.displayName).toBe("pi (core agent — legacy)");
 		expect(pi.currentVersion).toBe("0.67.1");
 		expect(pi.latestVersion).toBe("0.67.6");
 		expect(pi.updateAvailable).toBe(true);
