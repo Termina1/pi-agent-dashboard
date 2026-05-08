@@ -770,11 +770,11 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
     bootstrapState,
     networkGuard,
     triggerUpgradePi: async () => {
-      const packages = ["@mariozechner/pi-coding-agent"];
+      const packages = ["@earendil-works/pi-coding-agent"];
       bootstrapState.setLastInstallPackages(packages);
       bootstrapState.set({
         status: "installing",
-        progress: { step: "@mariozechner/pi-coding-agent", output: "starting upgrade…" },
+        progress: { step: "@earendil-works/pi-coding-agent", output: "starting upgrade…" },
         error: undefined,
       });
       try {
@@ -828,7 +828,7 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
       const prev = bootstrapState.getLastInstallPackages();
       const packages = prev.length > 0
         ? prev
-        : ["@mariozechner/pi-coding-agent", "@fission-ai/openspec", "tsx"];
+        : ["@earendil-works/pi-coding-agent", "@fission-ai/openspec", "tsx"];
       bootstrapState.set({
         status: "installing",
         progress: { step: "retry", output: `restarting install (${packages.length} pkg${packages.length === 1 ? "" : "s"})…` },

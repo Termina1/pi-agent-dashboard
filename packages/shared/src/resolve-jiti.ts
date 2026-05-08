@@ -4,7 +4,9 @@
  * The bridge extension runs inside pi's Node.js process. process.argv[1]
  * points to pi's CLI entry (e.g., pi-coding-agent/dist/cli.js). Since
  * jiti is a dependency of pi-coding-agent, createRequire(process.argv[1])
- * can resolve it directly.
+ * can resolve it directly. Modern pi builds depend on the plain `jiti`
+ * package name; older forks used scoped `@mariozechner/jiti` /
+ * `@oh-my-pi/jiti` names, so we probe all supported variants.
  */
 
 import { createRequire } from "node:module";
@@ -13,6 +15,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const JITI_PACKAGES = [
+  "jiti",
   "@mariozechner/jiti",
   "@oh-my-pi/jiti",
 ];
@@ -69,7 +72,7 @@ export function resolveJitiImport(): string {
 
   throw new Error(
     "Cannot find pi's TypeScript loader (jiti). " +
-    "Is @mariozechner/pi-coding-agent or @oh-my-pi/pi-coding-agent installed?"
+    "Is @earendil-works/pi-coding-agent, @mariozechner/pi-coding-agent, or @oh-my-pi/pi-coding-agent installed?"
   );
 }
 

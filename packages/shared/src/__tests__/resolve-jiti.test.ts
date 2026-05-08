@@ -38,16 +38,31 @@ describe("buildJitiRegisterUrl", () => {
 });
 
 describe("resolveJitiImport", () => {
-  // Integration-lite: in vitest context (not inside pi's jiti loader),
-  // process.argv[1] points at the test runner, not pi — so peer-dep
-  // resolution fails and the function throws a helpful error. The
-  // URL-contract behavior is covered by buildJitiRegisterUrl above.
+  // Force a non-pi anchor so the test remains stable even when the test
+  // runner itself happens to live next to a resolvable `jiti` install.
+  function withArgv1<T>(value: string | undefined, fn: () => T): T {
+    const prev = process.argv[1];
+    if (value === undefined) {
+      delete process.argv[1];
+    } else {
+      process.argv[1] = value;
+    }
+    try {
+      return fn();
+    } finally {
+      if (prev === undefined) {
+        delete process.argv[1];
+      } else {
+        process.argv[1] = prev;
+      }
+    }
+  }
 
   it("throws with clear error when pi-coding-agent is not resolvable", () => {
-    expect(() => resolveJitiImport()).toThrow("Cannot find pi's TypeScript loader");
+    expect(() => withArgv1("/definitely/missing/pi-cli.js", () => resolveJitiImport())).toThrow("Cannot find pi's TypeScript loader");
   });
 
   it("error message mentions pi-coding-agent", () => {
-    expect(() => resolveJitiImport()).toThrow("pi-coding-agent");
+    expect(() => withArgv1("/definitely/missing/pi-cli.js", () => resolveJitiImport())).toThrow("pi-coding-agent");
   });
 });

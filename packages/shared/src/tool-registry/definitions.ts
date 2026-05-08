@@ -188,7 +188,11 @@ const nodeScriptToArgv: ToolDefinition["toArgv"] = (resolvedPath, { platform, re
  * On Unix, the chain finds `pi` on PATH; argv = [pi].
  */
 function piExecutorDef(deps?: StrategyDeps): ToolDefinition {
-  const piPkgAliases = ["@mariozechner/pi-coding-agent", "@oh-my-pi/pi-coding-agent"];
+  const piPkgAliases = [
+    "@earendil-works/pi-coding-agent",
+    "@mariozechner/pi-coding-agent",
+    "@oh-my-pi/pi-coding-agent",
+  ];
   const cliEntry = path.join("dist", "cli.js");
 
   const winStrategies = [
@@ -413,7 +417,11 @@ export function registerDefaultTools(registry: ToolRegistry, deps?: StrategyDeps
   registry.register(
     moduleDefWithAliases(
       "pi-coding-agent",
-      ["@mariozechner/pi-coding-agent", "@oh-my-pi/pi-coding-agent"],
+      [
+        "@earendil-works/pi-coding-agent",
+        "@mariozechner/pi-coding-agent",
+        "@oh-my-pi/pi-coding-agent",
+      ],
       path.join("dist", "index.js"),
       deps,
     ),

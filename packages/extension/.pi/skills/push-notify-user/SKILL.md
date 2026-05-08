@@ -1,3 +1,8 @@
+---
+name: push-notify-user
+description: Send a push notification to the user's registered dashboard devices via the local pi-dashboard server. Use when the user asks to be notified when work completes or when a task reaches a milestone.
+---
+
 # push-notify-user
 
 Send a push notification to the user's devices via the dashboard's `/api/push/send` endpoint.

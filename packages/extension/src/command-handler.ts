@@ -15,6 +15,22 @@ import { expandPromptTemplateFromDisk } from "./prompt-expander.js";
 
 const IGNORE_DIRS = new Set([".git", "node_modules", ".next", "dist", "build", ".cache", "__pycache__", ".venv"]);
 const MAX_RESULTS = 20;
+const PI_CODING_AGENT_MODULE_IDS = [
+  "@earendil-works/pi-coding-agent",
+  "@mariozechner/pi-coding-agent",
+  "@oh-my-pi/pi-coding-agent",
+] as const;
+
+async function importPiCodingAgent(): Promise<any> {
+  for (const moduleId of PI_CODING_AGENT_MODULE_IDS) {
+    try {
+      return await import(moduleId);
+    } catch {
+      // try next package alias
+    }
+  }
+  throw new Error("pi-coding-agent runtime package is not available");
+}
 
 function searchFiles(cwd: string, query: string): FileEntry[] {
   const results: FileEntry[] = [];
@@ -388,7 +404,7 @@ export function createCommandHandler(
         case "list_sessions": {
           try {
             // Dynamic import to avoid hard dependency at module load
-            const { SessionManager } = await import("@mariozechner/pi-coding-agent") as any;
+            const { SessionManager } = await importPiCodingAgent() as any;
             const cwd = msg.cwd || options?.getCwd?.() || process.cwd();
             const sessionInfos = await SessionManager.list(cwd);
             const sessions: PiSessionInfo[] = (sessionInfos || []).map((s: any) => ({

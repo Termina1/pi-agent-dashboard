@@ -39,9 +39,13 @@ function resolveJitiFromPi(): string | null {
   // Try resolving from pi's known install locations
   const candidates = [
     // Global npm
+    tryResolveJiti("@earendil-works/pi-coding-agent"),
     tryResolveJiti("@mariozechner/pi-coding-agent"),
+    tryResolveJiti("@oh-my-pi/pi-coding-agent"),
     // Managed install
+    tryResolveJitiFrom(path.join(MANAGED_DIR, "node_modules", "@earendil-works", "pi-coding-agent", "package.json")),
     tryResolveJitiFrom(path.join(MANAGED_DIR, "node_modules", "@mariozechner", "pi-coding-agent", "package.json")),
+    tryResolveJitiFrom(path.join(MANAGED_DIR, "node_modules", "@oh-my-pi", "pi-coding-agent", "package.json")),
   ];
 
   for (const c of candidates) {
@@ -53,7 +57,7 @@ function resolveJitiFromPi(): string | null {
 function tryResolveJiti(piPkgName: string): string | null {
   try {
     const req = createRequire(require.resolve(`${piPkgName}/package.json`));
-    for (const jitiPkg of ["@mariozechner/jiti", "@oh-my-pi/jiti"]) {
+    for (const jitiPkg of ["jiti", "@mariozechner/jiti", "@oh-my-pi/jiti"]) {
       try {
         const pkgJson = req.resolve(`${jitiPkg}/package.json`);
         const registerPath = path.join(path.dirname(pkgJson), "lib", "jiti-register.mjs");
@@ -68,7 +72,7 @@ function tryResolveJitiFrom(piPkgJsonPath: string): string | null {
   if (!existsSync(piPkgJsonPath)) return null;
   try {
     const req = createRequire(piPkgJsonPath);
-    for (const jitiPkg of ["@mariozechner/jiti", "@oh-my-pi/jiti"]) {
+    for (const jitiPkg of ["jiti", "@mariozechner/jiti", "@oh-my-pi/jiti"]) {
       try {
         const pkgJson = req.resolve(`${jitiPkg}/package.json`);
         const registerPath = path.join(path.dirname(pkgJson), "lib", "jiti-register.mjs");

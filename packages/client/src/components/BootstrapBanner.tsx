@@ -33,7 +33,7 @@ export function BootstrapBanner({ state, onRetry }: Props): React.ReactElement |
         >
           <Icon path={mdiInformationOutline} size={0.7} className="flex-shrink-0" />
           <div className="flex-1 min-w-0">
-            A newer version of <strong>@mariozechner/pi-coding-agent</strong> is recommended
+            A newer version of <strong>pi-coding-agent</strong> is recommended
             {state.compatibility.current ? ` (you have ${state.compatibility.current})` : ""}.
           </div>
         </div>

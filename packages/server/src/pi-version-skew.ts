@@ -98,10 +98,20 @@ export function readPiCompatibility(serverPkgJsonPath: string): Pick<
 export function readCurrentPiVersion(registry: ToolRegistry = getDefaultRegistry()): string | undefined {
   try {
     const req = createRequire(import.meta.url);
-    const pkgJson = req.resolve("@mariozechner/pi-coding-agent/package.json");
-    const raw = fs.readFileSync(pkgJson, "utf8");
-    const parsed = JSON.parse(raw) as { version?: string };
-    if (typeof parsed.version === "string") return parsed.version;
+    for (const pkgName of [
+      "@earendil-works/pi-coding-agent",
+      "@mariozechner/pi-coding-agent",
+      "@oh-my-pi/pi-coding-agent",
+    ]) {
+      try {
+        const pkgJson = req.resolve(`${pkgName}/package.json`);
+        const raw = fs.readFileSync(pkgJson, "utf8");
+        const parsed = JSON.parse(raw) as { version?: string };
+        if (typeof parsed.version === "string") return parsed.version;
+      } catch {
+        /* try next package alias */
+      }
+    }
   } catch {
     /* not resolvable yet */
   }

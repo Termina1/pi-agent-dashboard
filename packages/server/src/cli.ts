@@ -232,7 +232,7 @@ async function runDegradedModeBootstrap(server: DashboardServer): Promise<void> 
     return;
   }
 
-  const installPackages = ["@mariozechner/pi-coding-agent", "@fission-ai/openspec", "tsx"];
+  const installPackages = ["@earendil-works/pi-coding-agent", "@fission-ai/openspec", "tsx"];
   server.bootstrapState.setLastInstallPackages(installPackages);
   console.log("[bootstrap] installing (pi unresolved, running background install)");
   server.bootstrapState.set({
@@ -578,7 +578,7 @@ async function cmdUpgradePi(config: ServerConfig): Promise<void> {
 
   console.log("[upgrade-pi] no dashboard running — installing directly");
   const res = await bootstrapInstall({
-    packages: ["@mariozechner/pi-coding-agent"],
+    packages: ["@earendil-works/pi-coding-agent"],
     progress: (p) => {
       const line = p.output
         ? `[upgrade-pi] ${p.step} ${p.status}: ${p.output}`
