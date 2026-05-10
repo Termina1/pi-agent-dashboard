@@ -1,0 +1,4 @@
+schema: v0.3
+status: active
+supersedes:
+  - adapt-windows-integration-pr9
