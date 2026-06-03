@@ -114,6 +114,23 @@ describe("Process Manager", () => {
       const args = buildHeadlessArgs({});
       expect(args).toEqual(["--mode", "rpc"]);
     });
+
+    it("should include dashboard extension args before session flags", () => {
+      const args = buildHeadlessArgs({
+        dashboardExtensionArgs: ["--no-extensions", "--extension", "/path/to/bridge.ts"],
+        sessionFile: "/path/to/session.jsonl",
+        mode: "continue",
+      });
+      expect(args).toEqual([
+        "--mode",
+        "rpc",
+        "--no-extensions",
+        "--extension",
+        "/path/to/bridge.ts",
+        "--session",
+        "/path/to/session.jsonl",
+      ]);
+    });
   });
 
   describe("spawnPiSession", () => {

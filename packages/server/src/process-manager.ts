@@ -37,6 +37,7 @@ import {
   type UserSpawnStrategy,
 } from "@blackbelt-technology/pi-dashboard-shared/platform/spawn-mechanism.js";
 import type { SpawnFailureCode } from "@blackbelt-technology/pi-dashboard-shared/browser-protocol.js";
+import { resolveDashboardExtensionArgs } from "./dashboard-extension-filter.js";
 
 // ── Resolver seam (injectable for tests) ────────────────────────────────────
 
@@ -58,6 +59,11 @@ export interface SessionOptions {
   sessionFile?: string;
   mode?: "continue" | "fork";
   strategy?: SpawnStrategy;
+  /**
+   * CLI resource flags for dashboard-spawned pi processes. When present,
+   * these are appended to every pi invocation before session/fork flags.
+   */
+  dashboardExtensionArgs?: string[];
   /**
    * Server-minted spawn correlation token. When provided, injected into
    * the spawned process env as `PI_DASHBOARD_SPAWN_TOKEN`. The bridge
@@ -138,19 +144,29 @@ export function shellEscape(s: string): string {
 }
 
 /**
+ * Build dashboard-specific extension argv. Empty unless a spawn filter
+ * resolved a blocked extension such as pi-diffloop.
+ */
+function dashboardExtensionArgsToArgv(options?: SessionOptions): string[] {
+  return options?.dashboardExtensionArgs ?? [];
+}
+
+/**
  * Build the argv tail for a headless pi invocation: `--mode rpc` plus
- * `--session <file>` or `--fork <file>` when options provide them.
+ * dashboard resource flags and `--session <file>` or `--fork <file>`
+ * when options provide them.
  */
 export function buildHeadlessArgs(options?: SessionOptions): string[] {
-  return ["--mode", "rpc", ...sessionFlagsToArgv(options ?? {})];
+  return ["--mode", "rpc", ...dashboardExtensionArgsToArgv(options), ...sessionFlagsToArgv(options ?? {})];
 }
 
 /**
  * Build the argv tail for an INTERACTIVE pi invocation (wt, tmux, wsl-tmux):
- * no `--mode rpc`; just session/fork flags when provided.
+ * no `--mode rpc`; dashboard resource flags plus session/fork flags when
+ * provided.
  */
 export function buildInteractivePiArgs(options?: SessionOptions): string[] {
-  return sessionFlagsToArgv(options ?? {});
+  return [...dashboardExtensionArgsToArgv(options), ...sessionFlagsToArgv(options ?? {})];
 }
 
 /**
@@ -159,7 +175,7 @@ export function buildInteractivePiArgs(options?: SessionOptions): string[] {
  */
 export function buildTmuxCommand(cwd: string, sessionExists: boolean, options?: SessionOptions): string {
   const safeCwd = shellEscape(cwd);
-  const flags = sessionFlagsToArgv(options ?? {})
+  const flags = buildInteractivePiArgs(options)
     .map(shellEscape)
     .join(" ");
   const piCmd = flags ? `cd ${safeCwd} && pi ${flags}` : `cd ${safeCwd} && pi`;
@@ -336,12 +352,13 @@ export async function spawnPiSession(
     return { success: false, code: "DIR_MISSING", message: `Directory does not exist: ${spawnCwd}`, cwd: spawnCwd };
   }
 
-  // Mint a spawn token if the caller didn't provide one. Token is injected
-  // into the spawned process's env (via buildSpawnEnv) and surfaced on
-  // SpawnResult so callers can register it with the registries.
-  // See change: spawn-correlation-token.
+  // Resolve dashboard extension filtering once per spawn. When pi-diffloop
+  // is enabled in user/project settings, spawn with `--no-extensions` plus
+  // an explicit allowlist of every other enabled extension so diffloop never
+  // loads inside dashboard sessions.
   const spawnToken = options?.spawnToken ?? mintSpawnToken();
-  const opts: SessionOptions & { electronMode?: boolean } = { ...(options ?? {}), spawnToken };
+  const dashboardExtensionArgs = options?.dashboardExtensionArgs ?? await resolveDashboardExtensionArgs(spawnCwd);
+  const opts: SessionOptions & { electronMode?: boolean } = { ...(options ?? {}), spawnToken, dashboardExtensionArgs };
 
   const mechanism = chooseMechanism(opts, opts?.electronMode ?? false);
 
