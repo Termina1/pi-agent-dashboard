@@ -22,6 +22,7 @@ import { detectOpenSpecActivity, isValidOpenSpecChangeSlug } from "@blackbelt-te
 import { extractTurnStats } from "@blackbelt-technology/pi-dashboard-shared/stats-extractor.js";
 import { attachRenameTarget, isNameAutoSetFromAttachment } from "./proposal-attach-naming.js";
 import { detectWorktree, resolveMainRepoRoot } from "./worktree-manager.js";
+import type { SessionSnapshotPrewarmQueue } from "./session-snapshot-store.js";
 
 export interface EventWiringDeps {
   sessionManager: SessionManager;
@@ -65,6 +66,8 @@ export interface EventWiringDeps {
   pushPrefsMap?: Map<string, PushPrefs>;
   /** Reads global push defaults from live config. */
   getPushDefaults?: () => PushDefaults | undefined;
+  /** Background snapshot refresh queue for completed live turns. */
+  snapshotPrewarmQueue?: Pick<SessionSnapshotPrewarmQueue, "enqueue">;
 }
 
 /**
@@ -88,6 +91,7 @@ export function wireEvents(deps: EventWiringDeps): void {
     pushDispatcher,
     pushPrefsMap,
     getPushDefaults,
+    snapshotPrewarmQueue,
   } = deps;
 
   // Broadcast placeholder session to browsers when auto-created from early events
@@ -354,6 +358,15 @@ export function wireEvents(deps: EventWiringDeps): void {
           };
           sessionManager.update(sessionId, clearUpdates);
           browserGateway.broadcastSessionUpdated(sessionId, clearUpdates);
+        }
+        const latestSession = sessionManager.get(sessionId);
+        if (latestSession?.sessionFile) {
+          snapshotPrewarmQueue?.enqueue({
+            sessionId,
+            sessionFile: latestSession.sessionFile,
+            contextWindow: latestSession.contextWindow,
+            activityAt: msg.event.timestamp,
+          });
         }
       }
 

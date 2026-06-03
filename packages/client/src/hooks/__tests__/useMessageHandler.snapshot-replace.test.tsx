@@ -52,6 +52,7 @@ function setup(initialSessions?: DashboardSession[], initialOrders?: Record<stri
     setSessionFlows: vi.fn(),
     setFileResults: vi.fn(),
     setOpenspecMap: vi.fn(),
+    setOpenspecGroupsMap: vi.fn(),
     setModelsMap: vi.fn(),
     setRolesMap: vi.fn(),
     setSpawnResult: vi.fn(),
@@ -73,6 +74,7 @@ function setup(initialSessions?: DashboardSession[], initialOrders?: Record<stri
     lastCreatedTerminalIdRef: { current: null },
     maxSeqMapRef: { current: new Map<string, number>() },
     selectedSessionIdRef: { current: undefined },
+    pendingSpawnsRef: { current: new Map() },
   };
 
   const { result } = renderHook(() => useMessageHandler(setters, deps));

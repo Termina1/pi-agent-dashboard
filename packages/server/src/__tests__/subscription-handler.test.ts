@@ -10,6 +10,28 @@ function makeEvent(type: string = "test"): DashboardEvent {
   return { eventType: type, timestamp: Date.now(), data: {} };
 }
 
+function makeSnapshot(sessionId: string, sessionFile: string): any {
+  return {
+    schemaVersion: 1,
+    projectorVersion: 1,
+    source: { sessionFile, size: 10, mtimeMs: 20 },
+    builtAt: 30,
+    transcript: {
+      messages: [{ id: "m1", role: "assistant", content: `snapshot:${sessionId}`, timestamp: 40 }],
+      tokensIn: 1,
+      tokensOut: 2,
+      cacheRead: 3,
+      cacheWrite: 4,
+      cost: 0.01,
+      model: "anthropic/claude-sonnet-4",
+      contextUsage: { tokens: 5, contextWindow: 100 },
+      hasFileChanges: false,
+      turnStats: [],
+      turnCount: 0,
+    },
+  };
+}
+
 function createMockContext(overrides: Partial<BrowserHandlerContext> = {}): BrowserHandlerContext {
   return {
     ws: { readyState: 1, OPEN: 1, bufferedAmount: 0 } as any,
@@ -159,21 +181,13 @@ describe("handleSubscribe — stale lastSeq detection", () => {
     expect(clearReplaying).toHaveBeenCalledWith(ctx.ws, "s1", 3);
   });
 
-  it("forwards session.contextWindow into directoryService.loadSessionEvents on lazy load", async () => {
-    // Regression: ended sessions opened from disk must replay with the
-    // persisted contextWindow (e.g. 1M Sonnet beta) instead of the legacy
-    // 200k Claude inference. The wiring lives in subscription-handler:160 —
-    // this test pins that loadSessionEvents is invoked with session.contextWindow
-    // as its 3rd argument so future refactors cannot silently drop it.
-    // See change: fix-context-window-reload.
-    const loadSessionEvents = vi.fn(async () => ({ success: true, events: [] }));
-    const directoryService = { loadSessionEvents } as any;
-    const ctx = createMockContext({ directoryService });
+  it("forwards session.contextWindow into snapshot read/build on lazy load", async () => {
+    const readOrBuild = vi.fn(async () => makeSnapshot("s-ctx", "/sessions/s-ctx.jsonl"));
+    const ctx = createMockContext({
+      directoryService: {} as any,
+      sessionSnapshotStore: { readOrBuild } as any,
+    });
 
-    // Restore an ENDED session with sessionFile + persisted contextWindow.
-    // No events in the store → falls into the lazy-load branch.
-    // (`restore()` takes the full DashboardSession; `register()` does not
-    // accept contextWindow as a registration param.)
     ctx.sessionManager.restore({
       id: "s-ctx",
       cwd: "/test",
@@ -195,8 +209,8 @@ describe("handleSubscribe — stale lastSeq detection", () => {
 
     await new Promise((r) => setTimeout(r, 20));
 
-    expect(loadSessionEvents).toHaveBeenCalledTimes(1);
-    expect(loadSessionEvents).toHaveBeenCalledWith("s-ctx", "/sessions/s-ctx.jsonl", 1_000_000);
+    expect(readOrBuild).toHaveBeenCalledTimes(1);
+    expect(readOrBuild).toHaveBeenCalledWith("s-ctx", "/sessions/s-ctx.jsonl", 1_000_000);
   });
 
   it("does full replay when lastSeq is 0", async () => {
@@ -215,6 +229,91 @@ describe("handleSubscribe — stale lastSeq detection", () => {
     const replays = calls.filter(([, msg]) => msg.type === "event_replay");
     const allEvents = replays.flatMap(([, msg]: any) => msg.events);
     expect(allEvents).toHaveLength(3);
+  });
+});
+
+describe("handleSubscribe — cold snapshot hydration", () => {
+  it("sends one session_snapshot and no historical event_replay on memory miss", async () => {
+    const readOrBuild = vi.fn(async () => makeSnapshot("cold", "/sessions/cold.jsonl"));
+    const ctx = createMockContext({
+      directoryService: {} as any,
+      sessionSnapshotStore: { readOrBuild } as any,
+    });
+    ctx.sessionManager.restore({
+      id: "cold",
+      cwd: "/repo",
+      source: "tui",
+      status: "ended",
+      startedAt: 1,
+      sessionFile: "/sessions/cold.jsonl",
+      hidden: false,
+    } as any);
+
+    handleSubscribe({ type: "subscribe", sessionId: "cold" }, new Set(), ctx);
+    await new Promise((r) => setTimeout(r, 20));
+
+    const calls = (ctx.sendTo as any).mock.calls as Array<[any, ServerToBrowserMessage]>;
+    expect(calls.filter(([, msg]) => msg.type === "session_snapshot")).toHaveLength(1);
+    expect(calls.filter(([, msg]) => msg.type === "event_replay")).toHaveLength(0);
+    expect(ctx.sessionManager.get("cold")?.dataUnavailable).toBe(false);
+    expect(ctx.sessionManager.get("cold")?.tokensIn).toBe(1);
+  });
+
+  it("marks dataUnavailable and does not send partial replay when snapshot build fails", async () => {
+    const readOrBuild = vi.fn(async () => { throw new Error("bad jsonl"); });
+    const ctx = createMockContext({
+      directoryService: {} as any,
+      sessionSnapshotStore: { readOrBuild } as any,
+    });
+    ctx.sessionManager.restore({
+      id: "bad",
+      cwd: "/repo",
+      source: "tui",
+      status: "ended",
+      startedAt: 1,
+      sessionFile: "/sessions/bad.jsonl",
+      hidden: false,
+    } as any);
+
+    handleSubscribe({ type: "subscribe", sessionId: "bad" }, new Set(), ctx);
+    await new Promise((r) => setTimeout(r, 20));
+
+    const calls = (ctx.sendTo as any).mock.calls as Array<[any, ServerToBrowserMessage]>;
+    expect(calls.filter(([, msg]) => msg.type === "event_replay")).toHaveLength(0);
+    expect(calls.filter(([, msg]) => msg.type === "session_snapshot")).toHaveLength(0);
+    expect(ctx.sessionManager.get("bad")?.dataUnavailable).toBe(true);
+    expect(ctx.broadcast).toHaveBeenCalledWith({
+      type: "session_updated",
+      sessionId: "bad",
+      updates: { dataUnavailable: true },
+    });
+  });
+
+  it("does not hydrate a non-ended session from a snapshot when memory is empty", async () => {
+    const readOrBuild = vi.fn(async () => makeSnapshot("live", "/sessions/live.jsonl"));
+    const ctx = createMockContext({
+      directoryService: {} as any,
+      sessionSnapshotStore: { readOrBuild } as any,
+    });
+    ctx.sessionManager.restore({
+      id: "live",
+      cwd: "/repo",
+      source: "tui",
+      status: "active",
+      startedAt: 1,
+      sessionFile: "/sessions/live.jsonl",
+      hidden: false,
+      dataUnavailable: false,
+    } as any);
+
+    handleSubscribe({ type: "subscribe", sessionId: "live" }, new Set(), ctx);
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(readOrBuild).not.toHaveBeenCalled();
+    const calls = (ctx.sendTo as any).mock.calls as Array<[any, ServerToBrowserMessage]>;
+    expect(calls.filter(([, msg]) => msg.type === "session_snapshot")).toHaveLength(0);
+    expect(calls.filter(([, msg]) => msg.type === "event_replay")).toHaveLength(1);
+    expect(ctx.sessionManager.get("live")?.dataUnavailable).toBe(false);
   });
 });
 

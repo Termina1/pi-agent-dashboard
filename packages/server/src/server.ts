@@ -32,6 +32,7 @@ import { advertiseDashboard, stopAdvertising, createBrowser, type DashboardBrows
 import { wireEvents } from "./event-wiring.js";
 import { createIdleTimer } from "./idle-timer.js";
 import { discoverAndBroadcastSessions } from "./session-bootstrap.js";
+import { createSessionSnapshotPrewarmQueue, defaultSessionSnapshotStore } from "./session-snapshot-store.js";
 import { scanAllSessions } from "./session-scanner.js";
 import { needsMigration, runMigration } from "./migrate-persistence.js";
 import { detectZrokBinary, cleanupStaleZrok, createTunnel, deleteTunnel, scavengeOrphanZrokProcesses, getTunnelUrl } from "./tunnel.js";
@@ -518,6 +519,7 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
       },
     },
   );
+  const sessionSnapshotPrewarmQueue = createSessionSnapshotPrewarmQueue();
 
   // mDNS peer discovery state
   let mdnsBrowser: DashboardBrowser | null = null;
@@ -568,7 +570,7 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
     },
   });
 
-  const browserGateway = createBrowserGateway(sessionManager, eventStore, piGateway, undefined, pendingForkRegistry, sessionOrderManager, preferencesStore, directoryService, terminalManager, pendingDashboardSpawns, config.maxWsBufferBytes, pendingAttachRegistry, pendingResumeIntents, pendingClientCorrelations, pushPrefsMap, () => config.push?.defaults);
+  const browserGateway = createBrowserGateway(sessionManager, eventStore, piGateway, undefined, pendingForkRegistry, sessionOrderManager, preferencesStore, directoryService, terminalManager, pendingDashboardSpawns, config.maxWsBufferBytes, pendingAttachRegistry, pendingResumeIntents, pendingClientCorrelations, pushPrefsMap, () => config.push?.defaults, defaultSessionSnapshotStore);
 
   // ── Push dispatcher (conditional on config.push.enabled && !config.push.errors) ──
   let pushDispatcher: PushDispatcher | undefined;
@@ -641,6 +643,7 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
     pushDispatcher,
     pushPrefsMap,
     getPushDefaults: () => config.push?.defaults,
+    snapshotPrewarmQueue: sessionSnapshotPrewarmQueue,
   });
 
   // Auto-shutdown idle timer
@@ -1420,7 +1423,7 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
       // Discover sessions and start OpenSpec polling (async, non-blocking)
       // Skip in fixture mode — sessions are pre-seeded or replayed by test-pi bridge.
       if (!isFixture) {
-        discoverAndBroadcastSessions({ sessionManager, browserGateway, directoryService });
+        discoverAndBroadcastSessions({ sessionManager, browserGateway, directoryService, prewarmQueue: sessionSnapshotPrewarmQueue });
       }
 
       // Auto-register plugin bridge entries (skip in fixture mode)

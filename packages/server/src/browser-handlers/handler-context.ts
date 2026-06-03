@@ -18,6 +18,7 @@ import type { PendingResumeRegistry } from "../pending-resume-registry.js";
 import type { PendingAttachRegistry } from "../pending-attach-registry.js";
 import type { PendingResumeIntentRegistry } from "../pending-resume-intent-registry.js";
 import type { PendingClientCorrelations } from "../pending-client-correlations.js";
+import type { SessionSnapshotStore } from "../session-snapshot-store.js";
 
 export interface BrowserHandlerContext {
   ws: WebSocket;
@@ -28,6 +29,7 @@ export interface BrowserHandlerContext {
   sessionOrderManager?: SessionOrderManager;
   preferencesStore?: PreferencesStore;
   directoryService?: DirectoryService;
+  sessionSnapshotStore?: SessionSnapshotStore;
   terminalManager?: TerminalManager;
   headlessPidRegistry: HeadlessPidRegistry;
   pushPrefsMap?: Map<string, import("../push/push-types.js").PushPrefs>;

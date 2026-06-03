@@ -13,6 +13,7 @@ import type {
   ServerToBrowserMessage,
   SpawnFailureCode,
   PreflightReason,
+  SessionTranscriptSnapshot,
 } from "@blackbelt-technology/pi-dashboard-shared/browser-protocol.js";
 
 /**
@@ -52,6 +53,29 @@ export interface MessageHandlerSetters {
   setDiscoveredServers: React.Dispatch<React.SetStateAction<DiscoveredServerInfo[]>>;
   setSpawnErrors: React.Dispatch<React.SetStateAction<Map<string, SpawnErrorDetail>>>;
   setResumeErrors: React.Dispatch<React.SetStateAction<Map<string, string>>>;
+}
+
+export function hydrateStateFromSessionSnapshot(snapshot: SessionTranscriptSnapshot): SessionState {
+  const state = createInitialState();
+  return {
+    ...state,
+    messages: snapshot.transcript.messages,
+    streamingText: "",
+    streamingThinking: "",
+    isStreaming: false,
+    model: snapshot.transcript.model,
+    thinkingLevel: snapshot.transcript.thinkingLevel,
+    tokensIn: snapshot.transcript.tokensIn,
+    tokensOut: snapshot.transcript.tokensOut,
+    cacheRead: snapshot.transcript.cacheRead,
+    cacheWrite: snapshot.transcript.cacheWrite,
+    cost: snapshot.transcript.cost,
+    status: "ended",
+    turnStats: snapshot.transcript.turnStats,
+    contextUsage: snapshot.transcript.contextUsage,
+    hasFileChanges: snapshot.transcript.hasFileChanges,
+    turnCount: snapshot.transcript.turnCount,
+  };
 }
 
 export interface MessageHandlerDeps {
@@ -288,6 +312,16 @@ export function useMessageHandler(
           return next;
         });
         break;
+
+      case "session_snapshot": {
+        setSessionStates((prev) => {
+          const next = new Map(prev);
+          next.set(msg.sessionId, hydrateStateFromSessionSnapshot(msg.snapshot));
+          return next;
+        });
+        maxSeqMapRef.current.set(msg.sessionId, 0);
+        break;
+      }
 
       case "event_replay": {
         const firstSeq = msg.events.length > 0 ? msg.events[0].seq : null;

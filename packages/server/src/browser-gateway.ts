@@ -56,6 +56,7 @@ export function buildOpenSpecConnectSnapshot(
 import { createPendingResumeRegistry, type PendingResumeRegistry } from "./pending-resume-registry.js";
 import { createViewedSessionTracker, type ViewedSessionTracker } from "./viewed-session-tracker.js";
 import type { TerminalManager } from "./terminal-manager.js";
+import type { SessionSnapshotStore } from "./session-snapshot-store.js";
 import type { BrowserHandlerContext } from "./browser-handlers/handler-context.js";
 import { handleSubscribe } from "./browser-handlers/subscription-handler.js";
 import { handleSendPrompt, handleResumeSession, handleSpawnSession, handleShutdown, handleAbort, handleFlowControl, handleForceKill, handleKillProcess } from "./browser-handlers/session-action-handler.js";
@@ -122,6 +123,7 @@ export function createBrowserGateway(
   pendingClientCorrelations?: import("./pending-client-correlations.js").PendingClientCorrelations,
   pushPrefsMap?: Map<string, import("./push/push-types.js").PushPrefs>,
   getPushDefaults?: () => import("@blackbelt-technology/pi-dashboard-shared/config.js").PushDefaults | undefined,
+  sessionSnapshotStore?: SessionSnapshotStore,
 ): BrowserGateway {
   const wss = new WebSocketServer({ noServer: true });
 
@@ -313,6 +315,7 @@ export function createBrowserGateway(
           pendingClientCorrelations,
           pushPrefsMap,
           getPushDefaults,
+          sessionSnapshotStore,
           sendTo, broadcast, getSubscribers, replayPendingUiRequests,
           trackUiRequest: trackUiRequest,
           markReplaying(targetWs, sessionId) {

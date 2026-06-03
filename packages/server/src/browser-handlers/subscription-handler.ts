@@ -4,7 +4,7 @@
 import type { WebSocket } from "ws";
 import type { ServerToBrowserMessage, BrowserToServerMessage } from "@blackbelt-technology/pi-dashboard-shared/browser-protocol.js";
 import type { BrowserHandlerContext } from "./handler-context.js";
-import { extractStatsFromEvents } from "../event-status-extraction.js";
+import { defaultSessionSnapshotStore } from "../session-snapshot-store.js";
 import type { StoredEvent } from "../memory-event-store.js";
 import type { PushPrefs } from "../push/push-types.js";
 import type { PushDefaults } from "@blackbelt-technology/pi-dashboard-shared/config.js";
@@ -146,7 +146,7 @@ export function handleSubscribe(
   subs: Set<string>,
   ctx: BrowserHandlerContext,
 ): void {
-  const { ws, sessionManager, eventStore, directoryService, piGateway, sendTo, broadcast, getSubscribers, replayPendingUiRequests, markReplaying, clearReplaying } = ctx;
+  const { ws, sessionManager, eventStore, directoryService, piGateway, sendTo, broadcast, replayPendingUiRequests, markReplaying, clearReplaying } = ctx;
   subs.add(msg.sessionId);
 
   // Request metadata from the extension so commands/flows/models/roles arrive
@@ -211,47 +211,35 @@ export function handleSubscribe(
     }
   } else if (directoryService) {
     const session = sessionManager.get(msg.sessionId);
-    if (session?.sessionFile) {
-      sendTo(ws, {
-        type: "event_replay",
-        sessionId: msg.sessionId,
-        events: [],
-        isLast: false,
-      });
-      directoryService.loadSessionEvents(msg.sessionId, session.sessionFile, session.contextWindow).then(async (result) => {
-        if (result.success) {
-          for (const evt of result.events) {
-            eventStore.insertEvent(msg.sessionId, evt);
-          }
-          const statsUpdates = extractStatsFromEvents(result.events);
-          const metaUpdates: Record<string, unknown> = { dataUnavailable: false, ...statsUpdates };
-          sessionManager.update(msg.sessionId, metaUpdates);
-          broadcast({ type: "session_updated", sessionId: msg.sessionId, updates: metaUpdates });
-          let stored = eventStore.getEvents(msg.sessionId, 1);
-          if (MAX_REPLAY_EVENTS > 0 && stored.length > MAX_REPLAY_EVENTS) {
-            stored = stored.slice(stored.length - MAX_REPLAY_EVENTS);
-          }
-          const subscribers = getSubscribers(msg.sessionId);
-          for (const sub of subscribers) {
-            // Asset registry first — see change: chat-markdown-local-images-and-math.
-            replaySessionAssets(sub, msg.sessionId, ctx);
-            await sendEventBatches(sub, msg.sessionId, stored, sendTo);
-            replayPendingUiRequests(sub, msg.sessionId);
-            replayUiState(sub, msg.sessionId, ctx);
-          }
-        } else {
-          sendTo(ws, { type: "event_replay", sessionId: msg.sessionId, events: [], isLast: true });
-          sessionManager.update(msg.sessionId, { dataUnavailable: true });
-          broadcast({ type: "session_updated", sessionId: msg.sessionId, updates: { dataUnavailable: true } });
+    const canUseColdSnapshot = session?.status === "ended" && !!session.sessionFile;
+    if (canUseColdSnapshot) {
+      const snapshotStore = ctx.sessionSnapshotStore ?? defaultSessionSnapshotStore;
+      snapshotStore.readOrBuild(msg.sessionId, session.sessionFile!, session.contextWindow).then((snapshot) => {
+        const metaUpdates: Record<string, unknown> = {
+          dataUnavailable: false,
+          tokensIn: snapshot.transcript.tokensIn,
+          tokensOut: snapshot.transcript.tokensOut,
+          cacheRead: snapshot.transcript.cacheRead,
+          cacheWrite: snapshot.transcript.cacheWrite,
+          cost: snapshot.transcript.cost,
+        };
+        if (snapshot.transcript.model !== undefined) metaUpdates.model = snapshot.transcript.model;
+        if (snapshot.transcript.contextUsage) {
+          metaUpdates.contextTokens = snapshot.transcript.contextUsage.tokens;
+          metaUpdates.contextWindow = snapshot.transcript.contextUsage.contextWindow;
         }
+        sessionManager.update(msg.sessionId, metaUpdates);
+        broadcast({ type: "session_updated", sessionId: msg.sessionId, updates: metaUpdates });
+        sendTo(ws, { type: "session_snapshot", sessionId: msg.sessionId, snapshot });
+        replayPendingUiRequests(ws, msg.sessionId);
+        replayUiState(ws, msg.sessionId, ctx);
       }).catch(() => {
-        sendTo(ws, { type: "event_replay", sessionId: msg.sessionId, events: [], isLast: true });
         sessionManager.update(msg.sessionId, { dataUnavailable: true });
         broadcast({ type: "session_updated", sessionId: msg.sessionId, updates: { dataUnavailable: true } });
       });
     } else {
       sendTo(ws, { type: "event_replay", sessionId: msg.sessionId, events: [], isLast: true });
-      if (session) {
+      if (session?.status === "ended") {
         sessionManager.update(msg.sessionId, { dataUnavailable: true });
         broadcast({ type: "session_updated", sessionId: msg.sessionId, updates: { dataUnavailable: true } });
       }

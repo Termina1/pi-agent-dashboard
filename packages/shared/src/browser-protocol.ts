@@ -17,6 +17,7 @@ import type {
 } from "./types.js";
 import type { TerminalSession } from "./terminal-types.js";
 import type { EditorInstanceStatus } from "./editor-types.js";
+import type { SkillBlock } from "./skill-block-parser.js";
 
 // ── Server → Browser ────────────────────────────────────────────────
 
@@ -56,6 +57,75 @@ export interface EventReplayMessage {
   sessionId: string;
   events: Array<{ seq: number; event: DashboardEvent }>;
   isLast: boolean;
+}
+
+export interface SessionSnapshotChatImage {
+  data: string;
+  mimeType: string;
+}
+
+export interface SessionSnapshotTurnStat {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  turnIndex: number;
+}
+
+export interface SessionSnapshotChatMessage {
+  id: string;
+  role: "user" | "assistant" | "toolResult" | "thinking" | "bashOutput" | "commandFeedback" | "interactiveUi" | "turnSeparator" | "rawEvent";
+  content: string;
+  images?: SessionSnapshotChatImage[];
+  toolName?: string;
+  toolCallId?: string;
+  isStreaming?: boolean;
+  timestamp: number;
+  args?: Record<string, unknown>;
+  result?: string;
+  toolStatus?: "running" | "complete" | "error";
+  startedAt?: number;
+  duration?: number;
+  turnIndex?: number;
+  toolDetails?: Record<string, unknown>;
+  entryId?: string;
+  nonce?: string;
+  skill?: SkillBlock;
+}
+
+export interface SessionSnapshotTranscript {
+  messages: SessionSnapshotChatMessage[];
+  tokensIn: number;
+  tokensOut: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+  model?: string;
+  thinkingLevel?: string;
+  contextUsage?: { tokens: number | null; contextWindow: number };
+  hasFileChanges: boolean;
+  turnStats: SessionSnapshotTurnStat[];
+  turnCount: number;
+}
+
+export interface SessionSnapshotSource {
+  sessionFile: string;
+  size: number;
+  mtimeMs: number;
+}
+
+export interface SessionTranscriptSnapshot {
+  schemaVersion: number;
+  projectorVersion: number;
+  source: SessionSnapshotSource;
+  builtAt: number;
+  transcript: SessionSnapshotTranscript;
+}
+
+export interface SessionSnapshotMessage {
+  type: "session_snapshot";
+  sessionId: string;
+  snapshot: SessionTranscriptSnapshot;
 }
 
 export interface BrowserCommandsListMessage {
@@ -536,6 +606,7 @@ export type ServerToBrowserMessage =
   | SessionRemovedMessage
   | EventMessage
   | EventReplayMessage
+  | SessionSnapshotMessage
   | BrowserCommandsListMessage
   | BrowserFlowsListMessage
   | BrowserExtensionUiRequestMessage

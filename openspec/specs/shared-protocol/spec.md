@@ -1,5 +1,6 @@
-## ADDED Requirements
-
+## Purpose
+Shared protocol defines typed messages between bridge, server, and browser.
+## Requirements
 ### Requirement: Load session events protocol messages
 The shared protocol SHALL define new message types for on-demand session loading between server and bridge extension.
 
@@ -143,7 +144,6 @@ The bridge extension SHALL handle `set_model` by looking up the model in the reg
 #### Scenario: Unknown model
 - **WHEN** the bridge receives `set_model` with an unrecognized provider/modelId
 - **THEN** it SHALL silently ignore the request (no error, no crash)
-## ADDED Requirements
 
 ### Requirement: Extension UI request message type (extension to server)
 The extension→server protocol SHALL define `ExtensionUiRequestMessage` with fields: `type: "extension_ui_request"`, `sessionId` (string), `requestId` (string), `method` (string), `params` (Record<string, unknown>). It SHALL be included in the `ExtensionToServerMessage` union.
@@ -220,7 +220,6 @@ The `DashboardSession.currentTool` field SHALL be typed as `string | null | unde
 - **WHEN** the server sends `session_updated` with `{ currentTool: null }`
 - **THEN** the browser SHALL receive `null` (not `undefined`) after JSON deserialization
 - **AND** the session card SHALL clear any tool indicator
-## ADDED Requirements
 
 ### Requirement: Flow control message type in extension protocol
 The extension protocol SHALL define a `flow_control` message type from server to extension for flow-specific commands.
@@ -296,7 +295,6 @@ The browser protocol SHALL define a `kill_process` message type for BrowserToSer
 - **WHEN** the browser protocol types are compiled
 - **THEN** `KillProcessRequestMessage` SHALL be a valid TypeScript interface in the `BrowserToServerMessage` union
 
-
 ### Requirement: Remove openspec_activity_update from ExtensionToServerMessage
 The `OpenSpecActivityUpdateMessage` type SHALL be removed from the `ExtensionToServerMessage` union. The server detects OpenSpec activity directly from forwarded `tool_execution_start` events.
 
@@ -341,8 +339,6 @@ When the field is absent (legacy bridge), the server SHALL treat the message as 
 #### Scenario: Field type is restricted to the two literals
 - **WHEN** the protocol type definition is compiled
 - **THEN** `SessionRegisterMessage.registerReason` SHALL be typed as `"spawn" | "reattach" | undefined`
-
-## ADDED Requirements
 
 ### Requirement: Sessions snapshot message (server to browser)
 
@@ -523,3 +519,33 @@ The `session_added` browser message SHALL include an optional `spawnRequestId?: 
 - **WHEN** a pre-change server emits `session_added`
 - **THEN** the message SHALL parse on a new client (the field is optional)
 - **AND** the client SHALL NOT crash; auto-select SHALL fall through to no-op
+
+### Requirement: Session snapshot browser protocol message
+The server-to-browser protocol SHALL include a `session_snapshot` message type used to hydrate finalized transcript state for cold inactive sessions without replaying historical event batches.
+
+The message SHALL include:
+- `type: "session_snapshot"`
+- `sessionId: string`
+- `snapshot.schemaVersion: number`
+- `snapshot.projectorVersion: number`
+- `snapshot.source.size: number`
+- `snapshot.source.mtimeMs: number`
+- `snapshot.builtAt: number`
+- `snapshot.transcript.messages`
+- `snapshot.transcript` token/cost totals and optional model/context fields
+
+`SessionSnapshotMessage` SHALL be included in the `ServerToBrowserMessage` union.
+
+#### Scenario: Message type definition
+- **WHEN** the browser protocol types are compiled
+- **THEN** `SessionSnapshotMessage` SHALL be a valid TypeScript interface with `type: "session_snapshot"`, `sessionId`, and `snapshot` fields
+
+#### Scenario: Union type inclusion
+- **WHEN** `ServerToBrowserMessage` union is checked
+- **THEN** it SHALL include `SessionSnapshotMessage`
+
+#### Scenario: Client hydrates snapshot atomically
+- **WHEN** the browser receives a `session_snapshot` message
+- **THEN** it SHALL replace that session's `SessionState` with a state hydrated from `snapshot.transcript` in a single state update
+- **AND** the hydrated state SHALL have no active `streamingText`
+
