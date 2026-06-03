@@ -4,6 +4,7 @@ import type { ToolRendererProps } from "./types.js";
 import { OpenFileButton } from "./OpenFileButton.js";
 import { useMobile } from "../../hooks/useMobile.js";
 import { RichDiff } from "../RichDiff.js";
+import { ToolDiffTextView } from "../ToolDiffTextView.js";
 
 function DiffView({ oldText, newText, filePath }: { oldText: string; newText: string; filePath: string }) {
   const patch = createTwoFilesPatch(filePath, filePath, oldText, newText, "before", "after", { context: 3 });
@@ -32,12 +33,32 @@ function DiffView({ oldText, newText, filePath }: { oldText: string; newText: st
   );
 }
 
-export function EditToolRenderer({ args, status, result, context }: ToolRendererProps) {
+type TextEdit = { oldText: string; newText: string };
+
+function isTextEdit(value: unknown): value is TextEdit {
+  return (
+    value != null &&
+    typeof value === "object" &&
+    typeof (value as Record<string, unknown>).oldText === "string" &&
+    typeof (value as Record<string, unknown>).newText === "string"
+  );
+}
+
+function getDetailsDiff(toolDetails?: Record<string, unknown>): string | undefined {
+  const diff = toolDetails?.diff;
+  if (typeof diff === "string" && diff.trim()) return diff;
+  const patch = toolDetails?.patch;
+  if (typeof patch === "string" && patch.trim()) return patch;
+  return undefined;
+}
+
+export function EditToolRenderer({ args, status, result, context, toolDetails }: ToolRendererProps) {
   const isMobile = useMobile();
-  const filePath = args?.path as string | undefined;
+  const filePath = (args?.path ?? args?.file_path) as string | undefined;
   const oldText = args?.oldText as string | undefined;
   const newText = args?.newText as string | undefined;
-  const edits = Array.isArray(args?.edits) ? (args.edits as Array<{ oldText: string; newText: string }>) : null;
+  const edits = Array.isArray(args?.edits) ? args.edits.filter(isTextEdit) : null;
+  const detailsDiff = getDetailsDiff(toolDetails);
 
   const renderDiffs = () => {
     if (oldText != null && newText != null) {
@@ -59,6 +80,13 @@ export function EditToolRenderer({ args, status, result, context }: ToolRenderer
                 : <RichDiff oldText={edit.oldText} newText={edit.newText} filePath={filePath ?? "file"} maxHeight="20rem" />}
             </div>
           ))}
+        </div>
+      );
+    }
+    if (detailsDiff) {
+      return (
+        <div className="rounded bg-[var(--bg-code)] overflow-hidden">
+          <ToolDiffTextView diff={detailsDiff} maxHeight="20rem" />
         </div>
       );
     }

@@ -533,6 +533,23 @@ function extractToolResultImages(data: Record<string, unknown>): ChatImage[] | u
   return undefined;
 }
 
+function extractToolResultDetails(data: Record<string, unknown>): Record<string, unknown> | undefined {
+  const directDetails = data.details;
+  if (directDetails && typeof directDetails === "object" && !Array.isArray(directDetails)) {
+    return directDetails as Record<string, unknown>;
+  }
+
+  const result = data.result;
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    const nestedDetails = (result as Record<string, unknown>).details;
+    if (nestedDetails && typeof nestedDetails === "object" && !Array.isArray(nestedDetails)) {
+      return nestedDetails as Record<string, unknown>;
+    }
+  }
+
+  return undefined;
+}
+
 /** Convert an unknown value to a display string (handles objects/arrays). */
 export function toDisplayString(value: unknown): string {
   if (value === null || value === undefined) return "";
@@ -1075,11 +1092,11 @@ export function reduceEvent(state: SessionState, event: DashboardEvent): Session
       // Update existing tool message in-place
       const idx = next.messages.findLastIndex((m) => m.toolCallId === toolCallId);
       if (idx !== -1) {
-        const result = data.result as string | undefined;
+        const result = data.result;
         const msgStartedAt = next.messages[idx].startedAt;
         next.messages = [...next.messages];
-        // Extract tool details (e.g. AgentDetails from replayed sessions)
-        const endDetails = data.details as Record<string, unknown> | undefined;
+        // Extract tool details (live events usually nest them in result.details; replay stores them at data.details).
+        const endDetails = extractToolResultDetails(data);
         // For live events (no endDetails), update existing toolDetails.status
         // so renderers (e.g. AgentToolRenderer) see the final status
         const isError = data.isError as boolean;
@@ -1095,7 +1112,7 @@ export function reduceEvent(state: SessionState, event: DashboardEvent): Session
         next.messages[idx] = {
           ...next.messages[idx],
           toolStatus: isError ? "error" : "complete",
-          result: result ? truncateLines(result, 30) : next.messages[idx].result,
+          result: result != null ? truncateLines(result, 30) : next.messages[idx].result,
           duration: msgStartedAt ? event.timestamp - msgStartedAt : undefined,
           ...(images ? { images } : {}),
           ...(mergedDetails ? { toolDetails: mergedDetails } : {}),

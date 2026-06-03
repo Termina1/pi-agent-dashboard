@@ -225,6 +225,35 @@ describe("eventReducer", () => {
     expect(state.messages[0].args).toEqual({ path: "file.ts" });
   });
 
+  it("extracts toolDetails from live tool result details on tool_execution_end", () => {
+    const state = applyEvents([
+      {
+        eventType: "tool_execution_start",
+        timestamp: Date.now(),
+        data: { toolCallId: "tc1", toolName: "edit", args: { path: "file.ts" } },
+      },
+      {
+        eventType: "tool_execution_end",
+        timestamp: Date.now(),
+        data: {
+          toolCallId: "tc1",
+          toolName: "edit",
+          isError: false,
+          result: {
+            content: [{ type: "text", text: "Updated file.ts" }],
+            details: { diff: "-1    old\n+1#HASH:new", firstChangedLine: 1 },
+          },
+        },
+      },
+    ]);
+
+    expect(state.messages[0].result).toBe("Updated file.ts");
+    expect(state.messages[0].toolDetails).toEqual({
+      diff: "-1    old\n+1#HASH:new",
+      firstChangedLine: 1,
+    });
+  });
+
   it("should truncate tool result to 30 lines", () => {
     const longResult = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join("\n");
     const state = applyEvents([

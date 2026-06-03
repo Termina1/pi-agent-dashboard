@@ -14,6 +14,62 @@ const MAX_MESSAGE_LENGTH = 120;
 
 const WRITE_EDIT_TOOLS = new Set(["write", "edit"]);
 
+function extractTextEdits(args: Record<string, unknown>): EditOperation[] | undefined {
+  const edits: EditOperation[] = [];
+
+  if (typeof args.oldText === "string" && typeof args.newText === "string") {
+    edits.push({ oldText: args.oldText, newText: args.newText });
+  }
+
+  if (Array.isArray(args.edits)) {
+    for (const edit of args.edits) {
+      if (
+        edit &&
+        typeof edit === "object" &&
+        typeof (edit as Record<string, unknown>).oldText === "string" &&
+        typeof (edit as Record<string, unknown>).newText === "string"
+      ) {
+        edits.push({
+          oldText: (edit as Record<string, unknown>).oldText as string,
+          newText: (edit as Record<string, unknown>).newText as string,
+        });
+      }
+    }
+  }
+
+  return edits.length > 0 ? edits : undefined;
+}
+
+function extractToolResultDetails(data: Record<string, unknown>): Record<string, unknown> | undefined {
+  const directDetails = data.details;
+  if (directDetails && typeof directDetails === "object" && !Array.isArray(directDetails)) {
+    return directDetails as Record<string, unknown>;
+  }
+
+  const result = data.result;
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    const nestedDetails = (result as Record<string, unknown>).details;
+    if (nestedDetails && typeof nestedDetails === "object" && !Array.isArray(nestedDetails)) {
+      return nestedDetails as Record<string, unknown>;
+    }
+  }
+
+  return undefined;
+}
+
+function extractDetailsDiff(details: Record<string, unknown> | undefined): string | undefined {
+  const diff = details?.diff;
+  if (typeof diff === "string" && diff.trim()) return diff;
+  const patch = details?.patch;
+  if (typeof patch === "string" && patch.trim()) return patch;
+  return undefined;
+}
+
+function extractFirstChangedLine(details: Record<string, unknown> | undefined): number | undefined {
+  const value = details?.firstChangedLine;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 /**
  * Extract file change events from session events.
  * Scans tool_execution_start events for Write/Edit tools,
@@ -22,6 +78,7 @@ const WRITE_EDIT_TOOLS = new Set(["write", "edit"]);
 export function extractFileChanges(events: DashboardEvent[], cwd: string): FileDiffEntry[] {
   const fileMap = new Map<string, FileChangeEvent[]>();
   let lastAssistantMessage: string | undefined;
+  const changeByToolCallId = new Map<string, FileChangeEvent>();
 
   for (const event of events) {
     // Track most recent assistant message for context
@@ -40,6 +97,19 @@ export function extractFileChanges(events: DashboardEvent[], cwd: string): FileD
             : content;
         }
       }
+    }
+
+    if (event.eventType === "tool_execution_end") {
+      const toolCallId = event.data.toolCallId as string | undefined;
+      const changeEvent = toolCallId ? changeByToolCallId.get(toolCallId) : undefined;
+      if (changeEvent) {
+        const details = extractToolResultDetails(event.data as Record<string, unknown>);
+        const diff = extractDetailsDiff(details);
+        if (diff) changeEvent.diff = diff;
+        const firstChangedLine = extractFirstChangedLine(details);
+        if (firstChangedLine !== undefined) changeEvent.firstChangedLine = firstChangedLine;
+      }
+      continue;
     }
 
     if (event.eventType !== "tool_execution_start") continue;
@@ -66,9 +136,13 @@ export function extractFileChanges(events: DashboardEvent[], cwd: string): FileD
     if (toolName === "write") {
       changeEvent.content = args.content as string | undefined;
     } else {
-      changeEvent.edits = args.edits as EditOperation[] | undefined;
+      changeEvent.edits = extractTextEdits(args);
     }
 
+    const toolCallId = event.data.toolCallId as string | undefined;
+    if (toolCallId) {
+      changeByToolCallId.set(toolCallId, changeEvent);
+    }
     const existing = fileMap.get(filePath);
     if (existing) {
       existing.push(changeEvent);

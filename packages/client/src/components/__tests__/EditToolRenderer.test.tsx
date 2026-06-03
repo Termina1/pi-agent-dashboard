@@ -120,6 +120,22 @@ describe("EditToolRenderer — viewport branching", () => {
     expect(container.querySelectorAll("div.font-mono").length).toBe(3);
   });
 
+  it("renders tool result details.diff when args use hashline edit schema", () => {
+    mockIsMobile = false;
+    const { getByTestId, queryAllByTestId, container } = render(
+      <EditToolRenderer
+        toolName="edit"
+        args={{ path: "file.ts", edits: [{ op: "replace", pos: "1#ABCD", lines: ["const a = 2;"] }] }}
+        status="complete"
+        context={ctx}
+        toolDetails={{ diff: "-1    const a = 1;\n+1#WXYZ:const a = 2;", firstChangedLine: 1 }}
+      />,
+    );
+    expect(queryAllByTestId("rich-diff").length).toBe(0);
+    expect(getByTestId("tool-diff-text").textContent).toContain("+1#WXYZ:const a = 2;");
+    expect(container.querySelector("pre")).toBeNull();
+  });
+
   // 5.6: no oldText/newText, no edits[] → raw JSON <pre> regardless of viewport
   it("desktop: falls back to raw JSON <pre> with no diff data", () => {
     mockIsMobile = false;

@@ -13,6 +13,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { getSyntaxTheme } from "../lib/syntax-theme.js";
 import { useThemeContext } from "./ThemeProvider.js";
 import { RichDiff, getLang } from "./RichDiff.js";
+import { ToolDiffTextView } from "./ToolDiffTextView.js";
 import type { FileChangeEvent, FileDiffEntry } from "@blackbelt-technology/pi-dashboard-shared/diff-types.js";
 import type { FileSelection } from "./DiffFileTree.js";
 
@@ -41,6 +42,11 @@ interface DiffPanelProps {
 }
 
 type ViewMode = "diff" | "file";
+type DiffData = {
+  richDiff?: { oldText: string; newText: string; filePath: string };
+  data?: any;
+  toolDiff?: string;
+} | null;
 
 export function DiffPanel({ file, selection, sessionId }: DiffPanelProps) {
   const { resolved: theme, themeName } = useThemeContext();
@@ -85,11 +91,12 @@ export function DiffPanel({ file, selection, sessionId }: DiffPanelProps) {
   }, [viewMode, file.path, sessionId]);
 
   // Build diff data for diff view mode only
-  const diffData = useMemo(() => {
+  const diffData = useMemo<DiffData>(() => {
     if (viewMode === "file") return null; // file mode uses SyntaxHighlighter directly
 
-    // Diff view — Path A: change-derived diffs (oldText/newText)
+    // Diff view — Path A: tool-provided display diff/patch, then change-derived diffs (oldText/newText)
     if (change) {
+      if (change.diff) return { toolDiff: change.diff };
       const texts = buildChangeDiffTexts(file.path, change);
       return texts ? { richDiff: { ...texts, filePath: file.path } } : null;
     }
@@ -112,6 +119,7 @@ export function DiffPanel({ file, selection, sessionId }: DiffPanelProps) {
     // Fallback: show the most recent change (Path A)
     const lastChange = file.changes[file.changes.length - 1];
     if (lastChange) {
+      if (lastChange.diff) return { toolDiff: lastChange.diff };
       const texts = buildChangeDiffTexts(file.path, lastChange);
       return texts ? { richDiff: { ...texts, filePath: file.path } } : null;
     }
@@ -182,6 +190,9 @@ export function DiffPanel({ file, selection, sessionId }: DiffPanelProps) {
           >
             {fileContent}
           </SyntaxHighlighter>
+        )}
+        {viewMode === "diff" && diffData && diffData.toolDiff && (
+          <ToolDiffTextView diff={diffData.toolDiff} />
         )}
         {viewMode === "diff" && diffData && diffData.richDiff && (
           <RichDiff

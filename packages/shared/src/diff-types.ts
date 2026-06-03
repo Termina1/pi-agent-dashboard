@@ -16,10 +16,14 @@ export interface FileChangeEvent {
   timestamp: number;
   /** Truncated assistant message preceding this change (reason/context) */
   message?: string;
-  /** Edit operations (only for type "edit") */
+  /** Edit operations (only for exact-text edit requests) */
   edits?: EditOperation[];
   /** Written content (only for type "write") */
   content?: string;
+  /** Tool-provided display diff or patch (from result.details.diff/patch) */
+  diff?: string;
+  /** Line number of the first change in the new file, when provided by the tool */
+  firstChangedLine?: number;
 }
 
 /** A file entry with all its change events */

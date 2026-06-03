@@ -44,6 +44,28 @@ describe("extractFileChanges", () => {
     expect(result[0].changes[0].edits).toEqual(edits);
   });
 
+  it("attaches edit diff from matching tool_execution_end details", () => {
+    const events = [
+      makeToolStart("Edit", { path: "src/bar.ts", edits: [{ op: "replace", pos: "1#ABCD", lines: ["bar"] }] }, 2000),
+      makeEvent("tool_execution_end", 2100, {
+        toolName: "Edit",
+        toolCallId: "tc-2000",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "Updated src/bar.ts" }],
+          details: { diff: "-1    foo\n+1#WXYZ:bar", firstChangedLine: 1 },
+        },
+      }),
+    ];
+
+    const result = extractFileChanges(events, cwd);
+    expect(result).toHaveLength(1);
+    expect(result[0].changes[0].type).toBe("edit");
+    expect(result[0].changes[0].edits).toBeUndefined();
+    expect(result[0].changes[0].diff).toBe("-1    foo\n+1#WXYZ:bar");
+    expect(result[0].changes[0].firstChangedLine).toBe(1);
+  });
+
   it("should be case-insensitive for tool names", () => {
     const events = [
       makeToolStart("write", { path: "a.ts", content: "x" }, 1000),
