@@ -36,6 +36,7 @@ import { DashboardDefaultAdapter } from "./dashboard-default-adapter.js";
 import { registerAskUserTool } from "./ask-user-tool.js";
 import { registerPushNotifyUserTool } from "./push-notify-user-tool.js";
 import { registerShowImageTool } from "./show-image-tool.js";
+import { registerShowFileTool } from "./show-file-tool.js";
 import { decodeMultiselectAnswer } from "./multiselect-decode.js";
 import { activate as activateProviderRegister, onProviderChanged, reloadProviders, buildProviderCatalogue } from "./provider-register.js";
 import type { FlowInfo } from "@blackbelt-technology/pi-dashboard-shared/types.js";
@@ -1066,6 +1067,18 @@ function initBridge(pi: ExtensionAPI) {
     // the dashboard chat (large figure + caption) instead of calling read or
     // hand-writing markdown. See change: add-show-image-tool.
     registerShowImageTool(pi, {
+      send: (msg) => connection.send(msg),
+      getEmittedAssetHashes,
+      getSessionId: () => sessionId,
+      getCwd: () => (cachedCtx?.cwd as string | undefined) ?? process.cwd(),
+      readFile: inlinerReadFile,
+    });
+
+    // Register show_file tool — generalisation of show_image for ANY file type
+    // (audio/video/PDF/text/archives/...) with an open/download link. Shares the
+    // same disk-backed asset pipeline (asset_register → /api/assets/:hash).
+    // See change: add-show-file-tool.
+    registerShowFileTool(pi, {
       send: (msg) => connection.send(msg),
       getEmittedAssetHashes,
       getSessionId: () => sessionId,

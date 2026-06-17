@@ -10,6 +10,7 @@ import { GenericToolRenderer } from "./GenericToolRenderer.js";
 import { AskUserToolRenderer } from "./AskUserToolRenderer.js";
 import { PlannotatorSubmitPlanRenderer } from "./PlannotatorSubmitPlanRenderer.js";
 import { ShowImageToolRenderer } from "./ShowImageToolRenderer.js";
+import { ShowFileToolRenderer } from "./ShowFileToolRenderer.js";
 
 const renderers = new Map<string, ToolRenderer>([
   ["read", ReadToolRenderer],
@@ -22,6 +23,7 @@ const renderers = new Map<string, ToolRenderer>([
   ["ask_user", AskUserToolRenderer],
   ["plannotator_submit_plan", PlannotatorSubmitPlanRenderer],
   ["show_image", ShowImageToolRenderer],
+  ["show_file", ShowFileToolRenderer],
 ]);
 
 /** Register a custom renderer for a tool name */

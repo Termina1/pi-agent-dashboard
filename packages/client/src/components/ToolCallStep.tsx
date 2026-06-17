@@ -58,11 +58,12 @@ export function ToolCallStep({ toolName, toolCallId, args, status, result, image
   const isAskUser = toolName === "ask_user";
   const isFailedAskUser = isAskUser && status === "error";
   const isPlannotatorReview = toolName === "plannotator_submit_plan" && status === "running";
-  // show_image renders a large inline figure — expand it immediately so the
-  // image is visible without a click (the figure is the whole point of the
-  // tool call). See change: add-show-image-tool.
+  // show_image / show_file render a large inline preview — expand immediately
+  // so the file is visible without a click (the preview is the whole point
+  // of the tool call). See changes: add-show-image-tool, add-show-file-tool.
   const isShowImage = toolName === "show_image";
-  const [expanded, setExpanded] = useState(hasImages || isAgentRunning || isPlannotatorReview || (isAskUser && !isFailedAskUser) || isShowImage);
+  const isShowFile = toolName === "show_file";
+  const [expanded, setExpanded] = useState(hasImages || isAgentRunning || isPlannotatorReview || (isAskUser && !isFailedAskUser) || isShowImage || isShowFile);
   const [stopState, setStopState] = useState<StopState>("idle");
   const Renderer = getToolRenderer(toolName);
 
