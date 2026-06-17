@@ -34,6 +34,30 @@ function getDropdownItems(container: HTMLElement): string[] {
   return items;
 }
 
+describe("CommandInput placeholder", () => {
+  it("renders a one-line truncated overlay placeholder", () => {
+    const { textarea, getByTestId } = renderInput();
+    const placeholder = getByTestId("message-placeholder");
+    const text = placeholder.querySelector("span")!;
+
+    expect(text.textContent).toBe("Message, /command, !shell, or @file...");
+    expect(text.style.whiteSpace).toBe("nowrap");
+    expect(text.style.overflow).toBe("hidden");
+    expect(text.style.textOverflow).toBe("ellipsis");
+    expect(placeholder.getAttribute("aria-hidden")).toBe("true");
+    expect(textarea.getAttribute("placeholder")).toBeNull();
+    expect(textarea.getAttribute("aria-label")).toBe("Message, /command, !shell, or @file...");
+  });
+
+  it("hides the overlay placeholder after text input", () => {
+    const { textarea, queryByTestId } = renderInput();
+
+    fireEvent.change(textarea, { target: { value: "hello" } });
+
+    expect(queryByTestId("message-placeholder")).toBeNull();
+  });
+});
+
 describe("CommandInput autocomplete", () => {
   it("should show command dropdown when typing /", () => {
     const { container, textarea } = renderInput();

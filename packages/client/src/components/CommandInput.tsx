@@ -130,6 +130,7 @@ export function CommandInput({ commands: externalCommands, onSend, onListFiles, 
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [stopState, setStopState] = useState<StopState>("idle");
   const isMobile = useMobile();
+  const messagePlaceholder = "Message, /command, !shell, or @file...";
 
   // Track whether iOS software keyboard is covering the safe area.
   // When keyboard is up, the home indicator area is already behind the keyboard,
@@ -541,31 +542,47 @@ export function CommandInput({ commands: externalCommands, onSend, onListFiles, 
         >
           <Icon path={mdiPaperclip} size={0.65} />
         </button>
-        <textarea
-          ref={inputRef}
-          value={text}
-          onChange={(e) => {
-            // Any user-driven text change while navigating history exits history mode
-            // (the user is now editing the recalled entry). We don't restore the saved
-            // draft here — the edited text becomes the live draft.
-            if (historyIndexRef.current !== null) {
-              setHistoryIndex(null);
-            }
-            setText(e.target.value);
-          }}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          placeholder="Message, /command, !shell, or @file..."
-          disabled={disabled || pendingPrompt}
-          rows={1}
-          className="flex-1 bg-[var(--bg-tertiary)] rounded-lg px-4 py-1.5 text-base text-[var(--text-primary)] placeholder-gray-500 border border-[var(--border-secondary)] focus:border-blue-500 focus:outline-none disabled:opacity-50 resize-none"
-          style={{ minHeight: "40px", maxHeight: "120px" }}
-          onInput={(e) => {
-            const target = e.target as HTMLTextAreaElement;
-            target.style.height = "40px";
-            target.style.height = Math.min(target.scrollHeight, 120) + "px";
-          }}
-        />
+        <div className="flex-1 relative min-w-0">
+          {!text && (
+            <div
+              aria-hidden="true"
+              className="absolute inset-y-0 left-4 right-4 z-10 flex items-center pointer-events-none"
+              data-testid="message-placeholder"
+            >
+              <span
+                className="block w-full text-base text-gray-500"
+                style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+              >
+                {messagePlaceholder}
+              </span>
+            </div>
+          )}
+          <textarea
+            ref={inputRef}
+            value={text}
+            onChange={(e) => {
+              // Any user-driven text change while navigating history exits history mode
+              // (the user is now editing the recalled entry). We don't restore the saved
+              // draft here — the edited text becomes the live draft.
+              if (historyIndexRef.current !== null) {
+                setHistoryIndex(null);
+              }
+              setText(e.target.value);
+            }}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            aria-label={messagePlaceholder}
+            disabled={disabled || pendingPrompt}
+            rows={1}
+            className="block w-full bg-[var(--bg-tertiary)] rounded-lg px-4 py-1.5 text-base text-[var(--text-primary)] border border-[var(--border-secondary)] focus:border-blue-500 focus:outline-none disabled:opacity-50 resize-none"
+            style={{ minHeight: "40px", maxHeight: "120px" }}
+            onInput={(e) => {
+              const target = e.target as HTMLTextAreaElement;
+              target.style.height = "40px";
+              target.style.height = Math.min(target.scrollHeight, 120) + "px";
+            }}
+          />
+        </div>
         <button
           onClick={handleSend}
           disabled={disabled || pendingPrompt || !text.trim()}
