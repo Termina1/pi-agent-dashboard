@@ -132,7 +132,8 @@ describe("EditToolRenderer — viewport branching", () => {
       />,
     );
     expect(queryAllByTestId("rich-diff").length).toBe(0);
-    expect(getByTestId("tool-diff-text").textContent).toContain("+1#WXYZ:const a = 2;");
+    expect(getByTestId("tool-diff-text").textContent).toContain("const a = 2;");
+    expect(getByTestId("tool-diff-text").textContent).not.toContain("WXYZ");
     expect(container.querySelector("pre")).toBeNull();
   });
 

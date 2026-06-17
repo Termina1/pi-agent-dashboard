@@ -192,7 +192,7 @@ export function DiffPanel({ file, selection, sessionId }: DiffPanelProps) {
           </SyntaxHighlighter>
         )}
         {viewMode === "diff" && diffData && diffData.toolDiff && (
-          <ToolDiffTextView diff={diffData.toolDiff} />
+          <ToolDiffTextView diff={diffData.toolDiff} filePath={file.path} />
         )}
         {viewMode === "diff" && diffData && diffData.richDiff && (
           <RichDiff

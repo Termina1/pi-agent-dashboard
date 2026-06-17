@@ -86,7 +86,7 @@ export function EditToolRenderer({ args, status, result, context, toolDetails }:
     if (detailsDiff) {
       return (
         <div className="rounded bg-[var(--bg-code)] overflow-hidden">
-          <ToolDiffTextView diff={detailsDiff} maxHeight="20rem" />
+          <ToolDiffTextView diff={detailsDiff} filePath={filePath} maxHeight="20rem" />
         </div>
       );
     }
