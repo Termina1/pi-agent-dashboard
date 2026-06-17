@@ -2,7 +2,47 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createBranchedSessionFile } from "../session-file-reader.js";
+import { createBranchedSessionFile, loadSessionEntries } from "../session-file-reader.js";
+
+describe("loadSessionEntries", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "session-load-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("preserves append order when no explicit leaf marker exists", () => {
+    const sessionFile = join(tmpDir, "test-session.jsonl");
+    const entries = [
+      { type: "session", id: "sess-1", timestamp: "2025-01-01T00:00:00Z", cwd: "/tmp" },
+      { type: "message", id: "root", parentId: null, message: { role: "user", content: "root" } },
+      { type: "message", id: "branch-a", parentId: "root", message: { role: "assistant", content: "old branch" } },
+      { type: "message", id: "branch-b", parentId: "root", message: { role: "user", content: "new branch" } },
+      { type: "custom", id: "custom-b", parentId: "branch-b" },
+    ];
+    writeFileSync(sessionFile, entries.map(e => JSON.stringify(e)).join("\n") + "\n");
+
+    expect(loadSessionEntries(sessionFile).map((e) => e.id)).toEqual(["root", "branch-a", "branch-b", "custom-b"]);
+  });
+
+  it("uses explicit leaf marker when present", () => {
+    const sessionFile = join(tmpDir, "test-session.jsonl");
+    const entries = [
+      { type: "session", id: "sess-1", timestamp: "2025-01-01T00:00:00Z", cwd: "/tmp" },
+      { type: "message", id: "root", parentId: null, message: { role: "user", content: "root" } },
+      { type: "message", id: "branch-a", parentId: "root", message: { role: "assistant", content: "old branch" } },
+      { type: "message", id: "branch-b", parentId: "root", message: { role: "user", content: "new branch" } },
+      { type: "leaf", entryId: "branch-a" },
+    ];
+    writeFileSync(sessionFile, entries.map(e => JSON.stringify(e)).join("\n") + "\n");
+
+    expect(loadSessionEntries(sessionFile).map((e) => e.id)).toEqual(["root", "branch-a"]);
+  });
+});
 
 describe("createBranchedSessionFile", () => {
   let tmpDir: string;

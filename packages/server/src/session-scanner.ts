@@ -52,6 +52,8 @@ function readJsonlMtime(sessionFile: string): number | undefined {
   }
 }
 
+const STALE_ACTIVE_SESSION_MS = 60_000;
+
 /** Build a DashboardSession from cached `.meta.json` data */
 function sessionFromMeta(
   sessionId: string,
@@ -60,19 +62,33 @@ function sessionFromMeta(
   meta: SessionMeta,
   startedAt: number,
 ): DashboardSession {
+  const rawStatus = (meta.status as DashboardSession["status"]) ?? "ended";
+  const lastActivityAt = readJsonlMtime(sessionFile);
+  // Disk-only discovery can see stale `.meta.json` files left as active/streaming
+  // after a TUI/bridge vanished. Treat old, non-updating JSONLs as ended so cold
+  // snapshot hydration is used instead of an empty/stale live event store.
+  const status = rawStatus !== "ended"
+    && lastActivityAt !== undefined
+    && Date.now() - lastActivityAt > STALE_ACTIVE_SESSION_MS
+      ? "ended"
+      : rawStatus;
+  const endedAt = status === "ended" && lastActivityAt !== undefined
+    ? Math.max(meta.endedAt ?? 0, lastActivityAt)
+    : meta.endedAt;
+
   return {
     id: sessionId,
     cwd: meta.cwd ?? "",
     name: meta.name,
     source: (meta.source as SessionSource) ?? "tui",
-    status: (meta.status as DashboardSession["status"]) ?? "ended",
+    status,
     model: meta.model,
     thinkingLevel: meta.thinkingLevel,
     startedAt: meta.startedAt ?? startedAt,
-    endedAt: meta.endedAt,
+    endedAt,
     // Seed last-activity from events.jsonl mtime so the session-card relative-time
     // badge survives server restarts. See change: session-card-last-activity-badge.
-    lastActivityAt: readJsonlMtime(sessionFile),
+    lastActivityAt,
     tokensIn: meta.tokensIn ?? 0,
     tokensOut: meta.tokensOut ?? 0,
     cacheRead: meta.cacheRead,
@@ -138,15 +154,34 @@ export function scanAllSessions(sessionsDir?: string): ScanResult {
       const meta = readSessionMeta(sessionFile);
 
       if (meta && meta.cwd) {
-        // Check cache freshness: if .jsonl is newer than cachedAt, re-extract
+        // Check cache freshness: if .jsonl is newer than cachedAt, re-extract.
+        // Also refresh lightweight header fields when older cached meta lacks them;
+        // session_info(name) can be appended later than the initial cache write.
         let needsReExtract = false;
+        let needsHeaderRefresh = !meta.name || !meta.firstMessage;
         if (meta.cachedAt) {
           try {
             const jsonlMtime = statSync(sessionFile).mtimeMs;
             if (jsonlMtime > meta.cachedAt) {
               needsReExtract = true;
+              needsHeaderRefresh = true;
             }
           } catch { /* ignore stat errors */ }
+        }
+        if (needsHeaderRefresh && !needsReExtract) {
+          const header = readJsonlHeaderSync(sessionFile);
+          const refreshed: SessionMeta = {
+            ...meta,
+            name: meta.name ?? header?.name,
+            firstMessage: meta.firstMessage ?? header?.firstMessage,
+            cachedAt: header?.name || header?.firstMessage ? Date.now() : meta.cachedAt,
+          };
+          if (refreshed.name !== meta.name || refreshed.firstMessage !== meta.firstMessage) {
+            writeSessionMeta(sessionFile, refreshed);
+            cacheUpdates++;
+            sessions.push(sessionFromMeta(sessionId, sessionFile, sessionDir, refreshed, startedAt));
+            continue;
+          }
         }
 
         if (!needsReExtract) {
@@ -167,10 +202,13 @@ export function scanAllSessions(sessionsDir?: string): ScanResult {
           const effectiveModel = stats.model ?? meta.model;
           const preserveContextWindow =
             meta.contextWindow !== undefined && effectiveModel === meta.model;
+          const header = readJsonlHeaderSync(sessionFile);
           const updated: SessionMeta = {
             ...meta,
             model: stats.model ?? meta.model,
             thinkingLevel: stats.thinkingLevel ?? meta.thinkingLevel,
+            name: meta.name ?? header?.name,
+            firstMessage: meta.firstMessage ?? header?.firstMessage,
             tokensIn: stats.tokensIn,
             tokensOut: stats.tokensOut,
             cacheRead: stats.cacheRead,
@@ -251,7 +289,7 @@ function readJsonlHeaderSync(filePath: string): { id: string; cwd: string; name?
             }
           }
         }
-        if (header && firstMessage) break;
+        if (header && firstMessage && name) break;
       } catch { /* skip malformed lines */ }
     }
 

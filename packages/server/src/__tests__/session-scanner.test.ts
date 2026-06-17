@@ -65,6 +65,7 @@ describe("session-scanner", () => {
     writeSessionMeta(sf, {
       cwd: "/test/cwd",
       name: "My Session",
+      firstMessage: "Hello world",
       source: "dashboard",
       status: "ended",
       startedAt: 1000,
@@ -81,6 +82,26 @@ describe("session-scanner", () => {
     expect(result.sessions[0].name).toBe("My Session");
     expect(result.sessions[0].cost).toBe(5.0);
     expect(result.cacheUpdates).toBe(0); // no re-extraction needed
+  });
+
+  it("should refresh missing cached name from later session_info", () => {
+    const dir = createSessionDir("--test-cwd--");
+    const sf = createJsonl(dir, "2026-03-30T21-39-43-034Z_late-name.jsonl", { id: "late-name", cwd: "/test/cwd" });
+    fs.appendFileSync(sf, JSON.stringify({ type: "session_info", id: "short-id", name: "e2e-tests" }) + "\n");
+    writeSessionMeta(sf, {
+      cwd: "/test/cwd",
+      status: "ended",
+      cachedAt: Date.now() + 10_000, // fresh cache, but missing name
+    });
+
+    const result = scanAllSessions(tmpDir);
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].name).toBe("e2e-tests");
+    expect(result.cacheUpdates).toBe(1);
+
+    const meta = JSON.parse(fs.readFileSync(metaPath(sf), "utf-8"));
+    expect(meta.name).toBe("e2e-tests");
   });
 
   it("should fall back to .jsonl parsing when no .meta.json exists", () => {
@@ -125,6 +146,42 @@ describe("session-scanner", () => {
     const result = scanAllSessions(tmpDir);
     expect(result.sessions).toHaveLength(1);
     expect(result.sessions[0].lastActivityAt).toBe(knownMtime.getTime());
+  });
+
+  it("should not sort ended sessions by stale meta endedAt when jsonl changed later", () => {
+    const dir = createSessionDir("--test-cwd--");
+    const sf = createJsonl(dir, "2026-03-30T21-39-43-034Z_stale-ended.jsonl", { id: "stale-ended", cwd: "/seed" });
+    writeSessionMeta(sf, {
+      cwd: "/seed",
+      status: "ended",
+      endedAt: 1_000,
+      cachedAt: Date.now() + 10_000,
+    });
+    const knownMtime = new Date("2026-04-15T12:00:00.000Z");
+    fs.utimesSync(sf, knownMtime, knownMtime);
+
+    const result = scanAllSessions(tmpDir);
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].endedAt).toBe(knownMtime.getTime());
+  });
+
+  it("should coerce stale active disk sessions to ended for cold snapshot hydration", () => {
+    const dir = createSessionDir("--test-cwd--");
+    const sf = createJsonl(dir, "2026-03-30T21-39-43-034Z_stale-active.jsonl", { id: "stale-active", cwd: "/seed" });
+    writeSessionMeta(sf, {
+      cwd: "/seed",
+      status: "active",
+      cachedAt: Date.now() + 10_000,
+    });
+    const oldMtime = new Date(Date.now() - 120_000);
+    fs.utimesSync(sf, oldMtime, oldMtime);
+
+    const result = scanAllSessions(tmpDir);
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].status).toBe("ended");
+    expect(result.sessions[0].endedAt).toBe(oldMtime.getTime());
   });
 
   it("should seed lastActivityAt from events.jsonl mtime (fallback parse path)", () => {

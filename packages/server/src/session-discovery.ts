@@ -74,8 +74,10 @@ function readSessionHeader(filePath: string): {
             }
           }
         }
-        // Stop scanning after finding what we need (optimization for large files)
-        if (header && firstMessage) break;
+        // Stop scanning after finding what we need (optimization for large files).
+        // session_info(name) may be appended after early user messages, so do not
+        // stop before it is found.
+        if (header && firstMessage && name) break;
       } catch {
         // Skip malformed lines
       }

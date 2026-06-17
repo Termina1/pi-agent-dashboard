@@ -50,11 +50,14 @@ export function loadSessionEntries(filePath: string): SessionEntry[] {
     if (entry.type === "session") continue; // skip header
     if (entry.id) {
       byId.set(entry.id, entry);
-      leafId = entry.id; // last entry with an id is the leaf
     }
   }
 
-  // Check for leaf pointer in header or metadata
+  // Check for an explicit leaf pointer. Do not infer the leaf from the last
+  // entry: extensions can append custom/model_change entries on a side branch
+  // long after the visible chat branch, which makes cold snapshots appear to
+  // "rewind" to an older fork. Without an explicit leaf marker, preserve the
+  // append-only JSONL order instead.
   for (const entry of entries) {
     if (entry.type === "leaf" && typeof entry.entryId === "string") {
       leafId = entry.entryId;
