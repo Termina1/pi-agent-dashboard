@@ -1,8 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { render, fireEvent, act, cleanup } from "@testing-library/react";
 import React from "react";
 import { CommandInput } from "../CommandInput.js";
 import type { CommandInfo } from "@blackbelt-technology/pi-dashboard-shared/types.js";
+
+afterEach(() => cleanup());
 
 const commands: CommandInfo[] = [
   { name: "deploy", description: "Deploy to production", source: "extension" },
@@ -343,6 +345,7 @@ describe("Image lightbox from paste preview", () => {
     const lightbox = document.body.querySelector("[data-testid='lightbox-backdrop']");
     expect(lightbox).not.toBeNull();
 
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 });
@@ -726,5 +729,90 @@ describe("CommandInput stale-closure regression (controlled mode, prop-ref chang
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("CommandInput image attach (file-picker + drag-drop)", () => {
+  // Neutralize leaks from earlier describe blocks: the paste-preview
+  // lightbox test stubs the global FileReader, and the @-file stale-closure
+  // test toggles vi.useFakeTimers. Restore both so our FileReader flush works.
+  beforeEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+  it("renders a paperclip attach button", () => {
+    const { getByTestId } = renderInput();
+    expect(getByTestId("attach-image-button")).toBeTruthy();
+  });
+
+  it("clicking the paperclip opens the hidden file input", () => {
+    const { getByTestId, container } = renderInput();
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    const clickSpy = vi.spyOn(input, "click");
+    fireEvent.click(getByTestId("attach-image-button"));
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    // input is hidden + accepts images + allows multiple + offers camera on mobile
+    expect(input.accept).toBe("image/*");
+    expect(input.multiple).toBe(true);
+  });
+
+  it("selecting a file via the picker calls onSend with the image on send", async () => {
+    const onSend = vi.fn();
+    const { container, textarea } = renderInput({ onSend });
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File([new Uint8Array([1, 2, 3, 4])], "shot.png", { type: "image/png" });
+    // jsdom doesn't populate `input.files` from fireEvent init; set it directly.
+    Object.defineProperty(input, "files", { value: [file], configurable: true });
+    await act(async () => {
+      fireEvent.change(input);
+      for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
+    });
+    // Type a message and send.
+    fireEvent.change(textarea, { target: { value: "look at this" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    const [, images] = onSend.mock.calls[0];
+    expect(images).toHaveLength(1);
+    expect(images[0].mimeType).toBe("image/png");
+  });
+
+  it("dragging files over the input shows the drop hint", () => {
+    const { container, getByText } = renderInput();
+    const dropZone = container.querySelector(".border-t") as HTMLElement;
+    fireEvent.dragOver(dropZone, {
+      dataTransfer: { types: ["Files"] } as unknown as DataTransfer,
+    });
+    expect(getByText("Drop images to attach")).toBeTruthy();
+  });
+
+  it("dropping image files attaches them and sends", async () => {
+    const onSend = vi.fn();
+    const { container, textarea } = renderInput({ onSend });
+    const dropZone = container.querySelector(".border-t") as HTMLElement;
+    const file = new File([new Uint8Array([1, 2, 3, 4])], "drop.png", { type: "image/png" });
+    // jsdom has no global DataTransfer and ignores init.files on DragEvent,
+    // so dispatch a native drop event with a hand-rolled dataTransfer.
+    const dropEvt = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(dropEvt, "dataTransfer", {
+      value: { files: [file], types: ["Files"] },
+    });
+    await act(async () => {
+      dropZone.dispatchEvent(dropEvt);
+      for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
+    });
+    fireEvent.change(textarea, { target: { value: "see drop" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    const [, images] = onSend.mock.calls[0];
+    expect(images).toHaveLength(1);
+    expect(images[0].mimeType).toBe("image/png");
+  });
+
+  it("ignores drops without files (e.g. text drag)", () => {
+    const { container, queryByText } = renderInput();
+    const dropZone = container.querySelector(".border-t") as HTMLElement;
+    fireEvent.drop(dropZone, {
+      dataTransfer: { types: ["text/plain"] } as unknown as DataTransfer,
+    });
+    expect(queryByText("Drop images to attach")).toBeNull();
   });
 });

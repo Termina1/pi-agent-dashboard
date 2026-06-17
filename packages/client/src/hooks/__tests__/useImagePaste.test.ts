@@ -166,3 +166,69 @@ describe("useImagePaste — controlled mode", () => {
 		expect(result.current.pendingImages).toBe(images);
 	});
 });
+
+describe("useImagePaste — addFiles (file-picker / drag-drop)", () => {
+	it("appends a picked PNG via addFiles", async () => {
+		const { result } = renderHook(() => useImagePaste());
+		act(() => { result.current.addFiles([makeFile("image/png")]); });
+		await act(async () => { await flushFileReader(); });
+		expect(result.current.pendingImages).toHaveLength(1);
+		expect(result.current.pendingImages[0].mimeType).toBe("image/png");
+	});
+
+	it("accepts a FileList (drag-and-drop drops DataTransfer.files)", async () => {
+		const { result } = renderHook(() => useImagePaste());
+		const fileList = {
+			0: makeFile("image/png"),
+			1: makeFile("image/jpeg"),
+			length: 2,
+			item: (i: number) => (i === 0 ? makeFile("image/png") : makeFile("image/jpeg")),
+		} as unknown as FileList;
+		act(() => { result.current.addFiles(fileList); });
+		await act(async () => { await flushFileReader(); });
+		expect(result.current.pendingImages).toHaveLength(2);
+	});
+
+	it("accepts multiple files at once", async () => {
+		const { result } = renderHook(() => useImagePaste());
+		act(() => {
+			result.current.addFiles([makeFile("image/png"), makeFile("image/gif"), makeFile("image/webp")]);
+		});
+		await act(async () => { await flushFileReader(); });
+		expect(result.current.pendingImages).toHaveLength(3);
+		expect(result.current.pendingImages.map((i) => i.mimeType).sort()).toEqual([
+			"image/gif",
+			"image/png",
+			"image/webp",
+		]);
+	});
+
+	it("rejects an unsupported type synchronously and still accepts the good ones", async () => {
+		const { result } = renderHook(() => useImagePaste());
+		act(() => {
+			result.current.addFiles([makeFile("image/bmp"), makeFile("image/png")]);
+		});
+		// Synchronous MIME rejection surfaces immediately.
+		expect(result.current.imageError).toMatch(/Unsupported/);
+		await act(async () => { await flushFileReader(); });
+		expect(result.current.pendingImages).toHaveLength(1);
+		expect(result.current.pendingImages[0].mimeType).toBe("image/png");
+	});
+
+	it("is a no-op on an empty list", () => {
+		const { result } = renderHook(() => useImagePaste());
+		act(() => { result.current.addFiles([]); });
+		expect(result.current.pendingImages).toEqual([]);
+		expect(result.current.imageError).toBeNull();
+	});
+
+	it("routes addFiles through onImagesChange in controlled mode", async () => {
+		let images: ImageContent[] = [];
+		const onImagesChange = vi.fn((next: ImageContent[]) => { images = next; });
+		const { result } = renderHook(() => useImagePaste({ images, onImagesChange }));
+		act(() => { result.current.addFiles([makeFile("image/png")]); });
+		await act(async () => { await flushFileReader(); });
+		expect(onImagesChange).toHaveBeenCalledTimes(1);
+		expect(onImagesChange.mock.calls[0][0]).toHaveLength(1);
+	});
+});

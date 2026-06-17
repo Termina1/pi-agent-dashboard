@@ -345,7 +345,7 @@ describe("MarkdownContent", () => {
   describe("pi-asset image resolution", () => {
     function renderWithAssets(
       content: string,
-      assets: Record<string, { data: string; mimeType: string }>,
+      assets: Record<string, { mimeType: string; data?: string }>,
     ) {
       return render(
         <ThemeProvider>
@@ -356,14 +356,14 @@ describe("MarkdownContent", () => {
       );
     }
 
-    it("resolves pi-asset:<hash> against the session asset map to a data: URL", () => {
+    it("resolves pi-asset:<hash> against the session asset map to the disk-backed HTTP URL", () => {
       const { container } = renderWithAssets(
         "![pic](pi-asset:abc1234567890123)",
-        { abc1234567890123: { data: "AAAA", mimeType: "image/png" } },
+        { abc1234567890123: { mimeType: "image/png" } },
       );
       const img = container.querySelector("img");
       expect(img).not.toBeNull();
-      expect(img!.getAttribute("src")).toBe("data:image/png;base64,AAAA");
+      expect(img!.getAttribute("src")).toBe(`${window.location.origin}/api/assets/abc1234567890123`);
       expect(img!.getAttribute("alt")).toBe("pic");
     });
 
@@ -404,14 +404,14 @@ describe("MarkdownContent", () => {
       expect(container.querySelector("img")).toBeNull();
       rerender(
         <ThemeProvider>
-          <SessionAssetsProvider assets={{ hhh: { data: "BBBB", mimeType: "image/jpeg" } }}>
+          <SessionAssetsProvider assets={{ hhh: { mimeType: "image/jpeg" } }}>
             <MarkdownContent content={content} />
           </SessionAssetsProvider>
         </ThemeProvider>,
       );
       const img = container.querySelector("img");
       expect(img).not.toBeNull();
-      expect(img!.getAttribute("src")).toBe("data:image/jpeg;base64,BBBB");
+      expect(img!.getAttribute("src")).toBe(`${window.location.origin}/api/assets/hhh`);
     });
   });
 
@@ -434,7 +434,7 @@ describe("MarkdownContent", () => {
     it("clicking a resolved pi-asset image opens the lightbox", () => {
       const { container } = render(
         <ThemeProvider>
-          <SessionAssetsProvider assets={{ abc: { data: "AAAA", mimeType: "image/png" } }}>
+          <SessionAssetsProvider assets={{ abc: { mimeType: "image/png" } }}>
             <MarkdownContent content="![pic](pi-asset:abc)" />
           </SessionAssetsProvider>
         </ThemeProvider>,
@@ -447,7 +447,7 @@ describe("MarkdownContent", () => {
       expect(backdrop).not.toBeNull();
       const modalImg = backdrop!.querySelector("img");
       expect(modalImg).not.toBeNull();
-      expect(modalImg!.getAttribute("src")).toBe("data:image/png;base64,AAAA");
+      expect(modalImg!.getAttribute("src")).toBe(`${window.location.origin}/api/assets/abc`);
       expect(modalImg!.getAttribute("alt")).toBe("pic");
     });
 

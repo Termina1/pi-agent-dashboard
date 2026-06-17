@@ -455,8 +455,11 @@ This section lists only the **architectural backbone** — the files agents touc
 | `packages/electron/src/main.ts` | Electron main: single-instance, wizard, server launch, loading page, tray |
 | `packages/electron/src/lib/link-handling.ts` | Pure `isSameOriginUrl` + OAuth-aware `decideWillNavigate` for external-link guard |
 | `packages/client/src/components/MarkdownContent.tsx` | ReactMarkdown renderer (chat/thinking/READMEs/previews); external-link hardening + KaTeX math + `pi-asset:` image scheme |
-| `packages/client/src/lib/SessionAssetsContext.tsx` | Per-session image-asset registry context resolving `pi-asset:<hash>` srcs in `MarkdownContent` |
+| `packages/client/src/lib/SessionAssetsContext.tsx` | Per-session image-asset registry; `assetUrl(hash)`=`/api/assets/<hash>`. See change: add-disk-backed-image-assets |
 | `packages/extension/src/markdown-image-inliner.ts` | Bridge helper rewriting assistant `![alt](path)` → `![alt](pi-asset:<hash>)` (SHA-256/16, MIME allowlist, 5 MB/img + 20 MB/msg caps) |
+| `packages/extension/src/show-image-tool.ts` | `show_image` tool — model passes local file PATH; bridge reads bytes, emits `asset_register`. See change: add-show-image-tool |
+| `packages/server/src/asset-store.ts` | Disk-backed image store at `~/.pi/dashboard/assets/`; `writeAsset`/`readAsset`/`gcAssetStore`. See change: add-disk-backed-image-assets |
+| `packages/server/src/routes/asset-routes.ts` | `GET /api/assets/:hash` — networkGuard-gated, streams persisted image. See change: add-disk-backed-image-assets |
 | `packages/client/src/__tests__/no-bare-external-anchor.test.ts` | Repo-lint: forbid bare `<a href="http(s)://">` without `target="_blank"` |
 | `packages/electron/src/lib/pick-node.ts` | Pure `pickNodeForServer` — prefer system Node when version-safe, else bundled |
 | `packages/electron/src/lib/ensure-windows-path.ts` | `ensureWindowsSystemPath` — prepend System32/npm/Git dirs on Windows; no-op on POSIX |

@@ -564,20 +564,25 @@ export interface BrowserExtUiDecoratorMessage {
 }
 
 /**
- * Server → browser: register a base64-encoded image asset under a content
- * hash for the given session. Forwarded verbatim from the bridge's
- * `asset_register` message and replayed to reconnecting browsers (in
- * chronological position relative to its referencing `message_update` /
- * `message_end`). The client populates a per-session `Map<hash,{data,mime}>`
- * consumed by the `MarkdownContent` `pi-asset:` resolver.
- * See change: chat-markdown-local-images-and-math.
+ * Server → browser: register an image asset under a content hash for the
+ * given session. The server persists the bytes to disk (see `asset-store.ts`)
+ * and serves them via `GET /api/assets/:hash`, so the `data` field is NOT
+ * forwarded to browsers — they render `<img src="/api/assets/<hash>">` from
+ * the hash alone. `data` is kept optional on the type for backward
+ * compatibility with older bridges that may still include it.
+ *
+ * Replayed to reconnecting browsers in chronological position relative to
+ * its referencing `message_update` / `message_end`. The client populates a
+ * per-session `Map<hash,{mimeType}>` consumed by the `pi-asset:` resolver.
+ * See changes: chat-markdown-local-images-and-math, add-disk-backed-image-assets.
  */
 export interface BrowserAssetRegisterMessage {
   type: "asset_register";
   sessionId: string;
   hash: string;
   mimeType: string;
-  data: string;
+  /** Not forwarded to browsers by the server (bytes live on disk). */
+  data?: string;
 }
 
 /** Per-session push notification preferences update. */

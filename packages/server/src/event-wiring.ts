@@ -21,6 +21,7 @@ import type { DashboardSession } from "@blackbelt-technology/pi-dashboard-shared
 import { detectOpenSpecActivity, isValidOpenSpecChangeSlug } from "@blackbelt-technology/pi-dashboard-shared/openspec-activity-detector.js";
 import { extractTurnStats } from "@blackbelt-technology/pi-dashboard-shared/stats-extractor.js";
 import { attachRenameTarget, isNameAutoSetFromAttachment } from "./proposal-attach-naming.js";
+import { writeAsset } from "./asset-store.js";
 import { detectWorktree, resolveMainRepoRoot } from "./worktree-manager.js";
 import type { SessionSnapshotPrewarmQueue } from "./session-snapshot-store.js";
 
@@ -162,6 +163,15 @@ export function wireEvents(deps: EventWiringDeps): void {
 
   piGateway.onEvent = (sessionId, msg) => {
     if (msg.type === "event_forward") {
+      // DEBUG DUMP: log message_update events carrying thinking_* assistantMessageEvent
+      const ev = msg.event as any;
+      if (ev?.eventType === "message_update" && ev?.data?.assistantMessageEvent) {
+        const ame = ev.data.assistantMessageEvent;
+        if (ame?.type?.startsWith("thinking_")) {
+          const { partial, ...rest } = ame;
+          console.log(`[THINKING-DUMP-SERVER] ${ame.type} keys=${JSON.stringify(Object.keys(ame).sort())} delta=${JSON.stringify(ame.delta)} deltaType=${typeof ame.delta} contentIndex=${ame.contentIndex}`);
+        }
+      }
       // When canSkipWipe was true, the event store already has all events —
       // don't insert replayed events again (would cause exponential duplication)
       if (replayingSessions.has(sessionId) && skipReplayInsert.has(sessionId)) {
@@ -833,30 +843,37 @@ export function wireEvents(deps: EventWiringDeps): void {
       } as any);
     }
 
-    // ── Asset register: per-session image asset cache + broadcast ──
-    // See change: chat-markdown-local-images-and-math.
+    // ── Asset register: persist bytes to disk + broadcast hash ──
+    // The bridge ships base64 once (localhost WS); the server persists the
+    // bytes to ~/.pi/dashboard/assets/ (see asset-store.ts) and serves them
+    // via GET /api/assets/:hash. Browsers render <img src="/api/assets/<hash>">
+    // — they never receive base64, so client memory stays flat and the asset
+    // survives a cold server restart (file + index on disk).
+    // See changes: chat-markdown-local-images-and-math, add-disk-backed-image-assets.
     if (msg.type === "asset_register") {
       const { hash, mimeType, data } = msg;
-      // Reject malformed messages defensively. The bridge always populates
-      // these fields; this guard is purely defense-in-depth so a
-      // misbehaving extension cannot inject placeholder asset entries.
       if (typeof hash === "string" && hash.length > 0 &&
-          typeof mimeType === "string" && mimeType.length > 0 &&
-          typeof data === "string" && data.length > 0) {
+          typeof mimeType === "string" && mimeType.length > 0) {
+        // Persist bytes if the bridge provided them (it always does for a
+        // fresh emission; replayed events may omit data when the file is
+        // already on disk).
+        if (typeof data === "string" && data.length > 0) {
+          writeAsset(hash, mimeType, data);
+        }
         const session = sessionManager.get(sessionId);
         if (session) {
           const next = { ...(session.assets ?? {}) };
-          next[hash] = { data, mimeType };
+          next[hash] = { mimeType };
           sessionManager.update(sessionId, { assets: next });
         }
-        // Broadcast verbatim regardless of whether the session is known —
-        // mirrors the Phase-1 / Phase-2 contract for extension UI messages.
+        // Broadcast WITHOUT data — clients build the URL from the hash
+        // alone and fetch via HTTP. (data field kept on the wire type for
+        // backward compat with older bridges but not forwarded to browsers.)
         browserGateway.sendToSubscribers(sessionId, {
           type: "asset_register",
           sessionId,
           hash,
           mimeType,
-          data,
         } as any);
       }
     }

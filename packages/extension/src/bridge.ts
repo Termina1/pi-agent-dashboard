@@ -4,6 +4,12 @@
  * Global extension that connects to the dashboard server,
  * forwards all pi events, and relays commands back.
  */
+// When Plannotator runs under the dashboard bridge, prefer a browser-visible
+// review URL over trying to open a browser on the agent host. The dashboard
+// renders ctx.ui.notify messages as inline cards and rewrites loopback hosts
+// client-side, so remote/LAN users get a clickable plan-review link.
+process.env.PLANNOTATOR_REMOTE ??= "1";
+process.env.PLANNOTATOR_BROWSER ??= "none";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Loader } from "@earendil-works/pi-tui";
 import { ConnectionManager } from "./connection.js";
@@ -29,6 +35,7 @@ import { PromptBus } from "./prompt-bus.js";
 import { DashboardDefaultAdapter } from "./dashboard-default-adapter.js";
 import { registerAskUserTool } from "./ask-user-tool.js";
 import { registerPushNotifyUserTool } from "./push-notify-user-tool.js";
+import { registerShowImageTool } from "./show-image-tool.js";
 import { decodeMultiselectAnswer } from "./multiselect-decode.js";
 import { activate as activateProviderRegister, onProviderChanged, reloadProviders, buildProviderCatalogue } from "./provider-register.js";
 import type { FlowInfo } from "@blackbelt-technology/pi-dashboard-shared/types.js";
@@ -46,7 +53,41 @@ import { inlineMessageText, type ReadFileOutcome } from "./markdown-image-inline
 const HEARTBEAT_INTERVAL = 15_000;
 const GIT_POLL_INTERVAL = 30_000;
 const PROCESS_SCAN_INTERVAL = 10_000;
+const PLANNOTATOR_REQUEST_CHANNEL = "plannotator:request";
+const PLANNOTATOR_DASHBOARD_TIMEOUT_MS = 5_000;
 
+function emitCommandFeedback(connection: ConnectionManager, sessionId: string, command: string, status: "started" | "completed" | "error", message?: string): void {
+  connection.send({
+    type: "event_forward",
+    sessionId,
+    event: {
+      eventType: "command_feedback",
+      timestamp: Date.now(),
+      data: message === undefined ? { command, status } : { command, status, message },
+    },
+  });
+}
+
+async function requestPlannotatorPlanMode(pi: ExtensionAPI, mode: "enter" | "exit" | "toggle" | "status"): Promise<{ phase?: string }> {
+  if (!pi.events?.emit) throw new Error("Pi event bus is unavailable.");
+  const requestId = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+  return await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Timed out waiting for Plannotator plan-mode response.")), PLANNOTATOR_DASHBOARD_TIMEOUT_MS);
+    pi.events.emit(PLANNOTATOR_REQUEST_CHANNEL, {
+      requestId,
+      action: "plan-mode",
+      payload: { mode },
+      respond: (response: any) => {
+        clearTimeout(timeout);
+        if (response?.status === "handled") {
+          resolve(response.result ?? {});
+          return;
+        }
+        reject(new Error(response?.error || "Plannotator plan-mode request was not handled."));
+      },
+    });
+  });
+}
 
 
 // Use `process` (not `globalThis`) to survive jiti module cache invalidation
@@ -92,6 +133,7 @@ export default function (pi: ExtensionAPI) {
     console.error("[dashboard] Bridge init failed:", err);
   }
 }
+
 
 
 
@@ -412,6 +454,14 @@ function initBridge(pi: ExtensionAPI) {
           connection.pauseAutoStart(quiesceMs);
           console.log(`[dashboard] server announced restart (reason=${reason} quiesceMs=${quiesceMs})`);
         }
+        // The server lost its in-memory `Session.assets` (and the browser's
+        // per-session asset map) on restart. Clear the bridge-side dedup set
+        // so the next `show_image` call / markdown-inliner pass re-emits
+        // `asset_register` for any image the model shows again. The server's
+        // `writeAsset` is idempotent (skips if the file is already on disk),
+        // so re-emission is cheap and re-broadcasts to reconnecting browsers.
+        // See change: add-disk-backed-image-assets.
+        emittedAssetHashesBySession.clear();
         return;
       }
       // Legacy extension_ui_response removed — now handled by prompt_response → promptBus.respond()
@@ -708,6 +758,18 @@ function initBridge(pi: ExtensionAPI) {
           pi.events.emit("flow:run", { flowName: cmdName, task: cmdArgs.trim() || undefined });
           return;
         }
+
+        if (cmdName === "plannotator") {
+          emitCommandFeedback(connection, sessionId, text, "started");
+          try {
+            const result = await requestPlannotatorPlanMode(pi, "toggle");
+            const suffix = result.phase ? `Plannotator phase: ${result.phase}` : "Plannotator plan mode toggled.";
+            emitCommandFeedback(connection, sessionId, text, "completed", suffix);
+          } catch (err) {
+            emitCommandFeedback(connection, sessionId, text, "error", err instanceof Error ? err.message : String(err));
+          }
+          return;
+        }
       }
 
       // Extension-command dispatch (routing step 9). When matched, the helper
@@ -717,6 +779,7 @@ function initBridge(pi: ExtensionAPI) {
         text,
         sessionId,
         (msg) => connection.send(msg),
+        cachedCtx,
       );
       if (handled) return;
 
@@ -939,6 +1002,13 @@ function initBridge(pi: ExtensionAPI) {
       // For other event types this is a no-op (role check inside the helper).
       // See change: chat-markdown-local-images-and-math.
       if (eventType === "message_update") {
+        // DEBUG: dump assistantMessageEvent to diagnose thinking blocks
+        const ame = (event as any).assistantMessageEvent;
+        if (ame?.type?.startsWith("thinking_")) {
+          require("fs").appendFileSync("/tmp/pi-thinking-dump.log", JSON.stringify({ts: Date.now(), type: ame.type, keys: Object.keys(ame).sort(), delta: ame.delta, deltaType: typeof ame.delta, contentIndex: ame.contentIndex, hasPartial: Boolean((ame as any).partial)}) + "\n");
+        } else if (!ame) {
+          console.error(`[BRIDGE-THINKING-DUMP] message_update MISSING assistantMessageEvent! event keys=${JSON.stringify(Object.keys(event).sort())}`);
+        }
         maybeInlineAssistantImages(event);
       }
 
@@ -991,6 +1061,17 @@ function initBridge(pi: ExtensionAPI) {
     // Tool is registered unconditionally; the description is proactive — agents
     // decide when to use it based on context. Server fanout handles Off/On modes.
     registerPushNotifyUserTool(pi);
+
+    // Register show_image tool so agents can display a local image inline in
+    // the dashboard chat (large figure + caption) instead of calling read or
+    // hand-writing markdown. See change: add-show-image-tool.
+    registerShowImageTool(pi, {
+      send: (msg) => connection.send(msg),
+      getEmittedAssetHashes,
+      getSessionId: () => sessionId,
+      getCwd: () => (cachedCtx?.cwd as string | undefined) ?? process.cwd(),
+      readFile: inlinerReadFile,
+    });
 
     // On session switch/fork (0.65.0+: event.reason replaces session_switch/session_fork events),
     // unregister the old session before re-registering the new one.

@@ -56,10 +56,46 @@ export interface UseImagePasteResult {
 	imageError: string | null;
 	/** Clipboard paste handler — attach to the textarea's onPaste. */
 	handlePaste: (e: React.ClipboardEvent) => void;
+	/** Add files from a file-picker or drag-and-drop. Validates each. */
+	addFiles: (files: File[] | FileList) => void;
 	/** Remove the image at index `i` from pendingImages. */
 	removeImage: (index: number) => void;
 	/** Clear everything — call after a successful send. */
 	clearImages: () => void;
+}
+
+/**
+ * Read a single File into an `ImageContent`, validating MIME + size.
+ * Resolves to `{ ok, image }` on success or `{ ok: false, error }` on
+ * rejection (unsupported type / too large / unreadable). Pure aside from
+ * the FileReader read — shared by paste, file-picker, and drag-and-drop.
+ */
+export function readImageFile(file: File): Promise<{ ok: true; image: ImageContent } | { ok: false; error: string }> {
+	const mimeType = file.type;
+	if (!SUPPORTED_IMAGE_TYPES.has(mimeType)) {
+		return Promise.resolve({
+			ok: false,
+			error: `Unsupported image type: ${mimeType || file.name}. Use JPEG, PNG, GIF, or WebP.`,
+		});
+	}
+	return new Promise((resolve) => {
+		const reader = new FileReader();
+		reader.onload = () => {
+			const dataUrl = reader.result as string;
+			const base64 = dataUrl.split(",")[1];
+			if (!base64) {
+				resolve({ ok: false, error: `Could not read image: ${file.name}` });
+				return;
+			}
+			if (base64.length > MAX_IMAGE_SIZE) {
+				resolve({ ok: false, error: `Image too large (max 10MB): ${file.name}` });
+				return;
+			}
+			resolve({ ok: true, image: { type: "image", data: base64, mimeType } });
+		};
+		reader.onerror = () => resolve({ ok: false, error: `Could not read image: ${file.name}` });
+		reader.readAsDataURL(file);
+	});
 }
 
 export function useImagePaste(opts?: UseImagePasteOptions): UseImagePasteResult {
@@ -90,42 +126,63 @@ export function useImagePaste(opts?: UseImagePasteOptions): UseImagePasteResult 
 		[isControlled, opts],
 	);
 
+	const setError = useCallback((msg: string) => {
+		setImageError(msg);
+		setTimeout(() => setImageError(null), 3000);
+	}, []);
+
+	const addFiles = useCallback((files: File[] | FileList) => {
+		const list = Array.from(files);
+		if (list.length === 0) return;
+		let syncError: string | null = null;
+		// Fast-reject unsupported types synchronously so the error surfaces in
+		// the same tick as the input (matches the original paste contract).
+		const accepted = list.filter((f) => {
+			if (SUPPORTED_IMAGE_TYPES.has(f.type)) return true;
+			if (syncError === null) {
+				syncError = `Unsupported image type: ${f.type || f.name}. Use JPEG, PNG, GIF, or WebP.`;
+			}
+			return false;
+		});
+		if (syncError) setError(syncError);
+		if (accepted.length === 0) return;
+		let pending: ImageContent[] = [];
+		let firstError: string | null = null;
+		let remaining = accepted.length;
+		const finish = () => {
+			remaining--;
+			if (remaining > 0) return;
+			if (pending.length > 0) {
+				writeImages((prev) => [...prev, ...pending]);
+			}
+			if (firstError) setError(firstError);
+		};
+		for (const file of accepted) {
+			readImageFile(file).then((r) => {
+				if (r.ok) {
+					pending.push(r.image);
+				} else if (firstError === null) {
+					firstError = r.error;
+				}
+				finish();
+			});
+		}
+	}, [writeImages, setError]);
+
 	const handlePaste = useCallback((e: React.ClipboardEvent) => {
 		const items = e.clipboardData.items;
+		const files: File[] = [];
 		for (const item of items) {
 			if (!item.type.startsWith("image/")) continue;
-
-			e.preventDefault();
-			// Capture mimeType eagerly — DataTransferItem may become invalid
-			// after the event handler returns.
-			const mimeType = item.type;
-
-			if (!SUPPORTED_IMAGE_TYPES.has(mimeType)) {
-				setImageError(`Unsupported image type: ${mimeType}. Use JPEG, PNG, GIF, or WebP.`);
-				setTimeout(() => setImageError(null), 3000);
-				continue;
-			}
-
 			const blob = item.getAsFile();
-			if (!blob) continue;
-
-			const reader = new FileReader();
-			reader.onload = () => {
-				const dataUrl = reader.result as string;
-				const base64 = dataUrl.split(",")[1];
-				if (!base64) return;
-
-				if (base64.length > MAX_IMAGE_SIZE) {
-					setImageError("Image too large (max 10MB)");
-					setTimeout(() => setImageError(null), 3000);
-					return;
-				}
-
-				writeImages((prev) => [...prev, { type: "image", data: base64, mimeType }]);
-			};
-			reader.readAsDataURL(blob);
+			if (blob) files.push(blob);
 		}
-	}, [writeImages]);
+		if (files.length === 0) return;
+		// Swallow the clipboard event so the base64 data URL is not inserted
+		// as text into the textarea.
+		e.preventDefault();
+		addFiles(files);
+	}, [addFiles]);
 
 	const removeImage = useCallback((index: number) => {
 		writeImages((prev) => prev.filter((_, i) => i !== index));
@@ -136,5 +193,5 @@ export function useImagePaste(opts?: UseImagePasteOptions): UseImagePasteResult 
 		setImageError(null);
 	}, [writeImages]);
 
-	return { pendingImages, imageError, handlePaste, removeImage, clearImages };
+	return { pendingImages, imageError, handlePaste, addFiles, removeImage, clearImages };
 }

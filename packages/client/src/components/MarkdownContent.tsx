@@ -12,7 +12,7 @@ import { mdiContentCopy, mdiTable } from "@mdi/js";
 import { CopyButton } from "./CopyButton.js";
 import { wrapAsciiTables } from "../lib/wrap-ascii-tables.js";
 import { MermaidBlock } from "./MermaidBlock.js";
-import { useSessionAssets } from "../lib/SessionAssetsContext.js";
+import { useSessionAssets, useAssetUrl } from "../lib/SessionAssetsContext.js";
 import { ImageLightbox } from "./ImageLightbox.js";
 
 interface Props {
@@ -217,6 +217,7 @@ function fixWideCharsInCodeBlocks(container: HTMLElement) {
  */
 function PiAssetImg(props: React.ImgHTMLAttributes<HTMLImageElement>) {
   const assets = useSessionAssets();
+  const buildAssetUrl = useAssetUrl();
   const [lightboxSrc, setLightboxSrc] = React.useState<{ src: string; alt: string } | null>(null);
   const { src, alt, className: incomingClass, onClick: _drop, ...rest } = props;
   const altText = typeof alt === "string" ? alt : "";
@@ -231,20 +232,21 @@ function PiAssetImg(props: React.ImgHTMLAttributes<HTMLImageElement>) {
     setLightboxSrc({ src: lbSrc, alt: altText });
   };
 
-  // pi-asset:<hash> path — resolve to data: URL or render placeholder.
+  // pi-asset:<hash> path — resolve to the disk-backed HTTP URL or render
+  // a placeholder while the asset_register broadcast is in flight.
   if (typeof src === "string" && src.startsWith("pi-asset:")) {
     const hash = src.slice("pi-asset:".length);
+    const url = buildAssetUrl(hash);
     const asset = assets[hash];
     if (asset) {
-      const dataUrl = `data:${asset.mimeType};base64,${asset.data}`;
       return (
         <>
           <img
             {...rest}
-            src={dataUrl}
+            src={url}
             alt={alt}
             className={baseClass}
-            onClick={(e) => openLightbox(e, dataUrl)}
+            onClick={(e) => openLightbox(e, url)}
           />
           {lightboxSrc && (
             <ImageLightbox

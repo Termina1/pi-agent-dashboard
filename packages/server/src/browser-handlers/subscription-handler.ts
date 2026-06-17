@@ -114,12 +114,13 @@ export function replayUiState(
 
 /**
  * Replay the per-session image asset registry to a single browser. Sends one
- * `asset_register` message per `(hash, { data, mimeType })` entry in
- * `Session.assets`. Called BEFORE `sendEventBatches` so any `pi-asset:<hash>`
- * tokens in replayed `message_update` / `message_end` events have their
- * referent in the client's session map by the time they're reduced.
+ * `asset_register` message per `(hash, { mimeType })` entry in
+ * `Session.assets`, WITHOUT base64 data — clients build the URL
+ * `/api/assets/<hash>` from the hash alone and fetch via HTTP. Called BEFORE
+ * `sendEventBatches` so any `pi-asset:<hash>` tokens in replayed
+ * `message_update` / `message_end` events resolve to a known-registered hash.
  *
- * See change: chat-markdown-local-images-and-math.
+ * See changes: chat-markdown-local-images-and-math, add-disk-backed-image-assets.
  */
 export function replaySessionAssets(
   ws: WebSocket,
@@ -130,13 +131,12 @@ export function replaySessionAssets(
   const session = sessionManager.get(sessionId);
   if (!session?.assets) return;
   for (const [hash, asset] of Object.entries(session.assets)) {
-    if (!asset || typeof asset.data !== "string" || typeof asset.mimeType !== "string") continue;
+    if (!asset || typeof asset.mimeType !== "string") continue;
     sendTo(ws, {
       type: "asset_register",
       sessionId,
       hash,
       mimeType: asset.mimeType,
-      data: asset.data,
     } as any);
   }
 }

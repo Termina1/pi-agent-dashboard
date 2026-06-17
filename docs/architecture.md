@@ -514,7 +514,11 @@ Consecutive tool calls with the same name and identical args (e.g. health check 
 
 ### Local-image inlining + LaTeX math in chat
 
-Assistant messages containing markdown image references to local files (`![alt](/abs/path.png)` or `![alt](./relative.png)`) are inlined by the bridge before the text leaves the agent process; LaTeX math (`$x = \beta$` and block-level `$$\n…\n$$`) is typeset client-side via KaTeX. Both behaviors live entirely in the chat-rendering pipeline — the dashboard server adds zero new HTTP routes.
+Assistant messages containing markdown image references to local files (`![alt](/abs/path.png)` or `![alt](./relative.png)`) inlined by bridge before text leaves agent process. LaTeX math (`$x = \beta$` and block-level `$$\n…\n$$`) typeset client-side via KaTeX. Two transport paths for images now: **disk-backed asset pipeline** (markdown inliner + `show_image` tool) and **inline data: URLs** (Read-tool images only — separate path, deferred).
+
+#### Disk-backed image asset pipeline
+
+Bridge reads local file, hashes bytes, rewrites token to `pi-asset:<hash>`, ships bytes once over localhost WS. Server persists bytes to disk; browsers fetch via extensionless HTTP URL built from hash token alone. No base64 in browser memory. Survives cold server restart. See change: `add-disk-backed-image-assets`.
 
 ```mermaid
 sequenceDiagram
@@ -527,32 +531,45 @@ sequenceDiagram
     bridge->>bridge: parseImageTokens → isLocalSrc → readFile<br/>(5MB/image, 20MB/message caps; MIME allowlist)<br/>hash = sha256(bytes).slice(0,16)
     bridge->>server: asset_register { sessionId, hash, mimeType, data:base64 }<br/>(only if hash not yet emitted this session)
     bridge->>server: message_update / message_end<br/>{ message.content: "![pic](pi-asset:abc1234567890123) and …" }
-    server->>server: asset_register → Session.assets[hash]<br/>= { data, mimeType }
-    server->>client: asset_register (broadcast to subscribers)
+    server->>server: writeAsset(hash,mimeType,data) →<br/>~/.pi/dashboard/assets/<hash>.<ext> + index.json<br/>Session.assets[hash] = { mimeType } (no data)
+    server->>client: asset_register { hash, mimeType } (broadcast, NO data)
     server->>client: event_forward (rewritten message text)
-    client->>client: useMessageHandler.asset_register →<br/>setSessions → DashboardSession.assets[hash]<br/>SessionAssetsContext re-renders descendants
-    client->>client: MarkdownContent.PiAssetImg resolves<br/>pi-asset:abc1234567890123 →<br/>data:image/png;base64,… → <img>
+    client->>client: useMessageHandler.asset_register →<br/>DashboardSession.assets[hash] = { mimeType }<br/>SessionAssetsContext re-renders descendants
+    client->>client: MarkdownContent.PiAssetImg resolves<br/>pi-asset:abc1234567890123 →<br/>assetUrl(hash) = /api/assets/abc1234567890123 → <img>
+    client->>server: GET /api/assets/abc1234567890123 (HTTP, streamed + cached)
+    server->>client: file bytes (Content-Type from index)
 ```
+
+Three image sources funnel into the same pipeline:
+
+- **Markdown inliner** (`markdown-image-inliner.ts`): assistant message text `![alt](path)` → rewritten to `pi-asset:<hash>`.
+- **`show_image` tool** (`show-image-tool.ts`): model calls `show_image({path, caption?, alt?})` with local file PATH only (no base64 in output tokens). Pure `resolveShowImageAsset` reuses inliner primitives (resolveLocalPath, mimeFromExtension, hashBytes, caps, dedup). `execute` reads file, emits `asset_register`, returns `details:{hash,caption,alt,path,mimeType}`. Client `ShowImageToolRenderer` renders `<figure>` (caption + lightbox, full-width mobile / max 600px desktop). Registered in `bridge.ts` session_start via `registerShowImageTool(pi, deps)` with DI (send, getEmittedAssetHashes, getSessionId, getCwd, readFile=inlinerReadFile). Idempotent. See change: `add-show-image-tool`.
+- **Read-tool images**: SEPARATE path. Still inline `data:` URLs from `tool_result` content blocks (base64 rides in event payload). NOT yet migrated to disk pipeline. Deferred to later phase.
 
 Key invariants:
 
-- **Server adds no new HTTP route.** No `/api/file/raw`. Image bytes ride inside the existing event/asset stream, mirroring how Read-tool images already work.
-- **Bandwidth-bounded streaming.** Each unique image's bytes are sent exactly once per session via `asset_register`. Subsequent `message_update` chunks only re-ship the short `pi-asset:<hash>` token (~25 chars) in the streaming text.
-- **Asset registry lives on `Session.assets`** (in-memory, not in the rolling event buffer). Subscription replay re-emits one `asset_register` per entry BEFORE the events array, so reconnecting browsers see the registry populated by the time their `message_update` events are reduced. Cold-start full-server-restart loses bytes; older `pi-asset:` tokens render as a placeholder until a fresh assistant message references the same file.
-- **Math plugin chain.** `MarkdownContent.tsx` registers `remarkPlugins: [remarkGfm, remarkMath]` and `rehypePlugins: [rehypeRaw, [rehypeKatex, { throwOnError: false }], stripReactRefAttributes]`. `rehypeRaw` runs FIRST (so embedded HTML is parsed before KaTeX emits its own). `throwOnError:false` keeps streaming half-formed expressions like `$x = 10 +` from crashing the markdown render. `urlTransform={(v)=>v}` disables ReactMarkdown's default scheme-stripping so `pi-asset:` and `data:` srcs reach the `img` override intact.
+- **Server adds ONE new HTTP route.** `GET /api/assets/:hash` (networkGuard-gated: loopback/trusted OR JWT, same as `/api/file`). Streams file from disk with Content-Type from `index.json`; `Cache-Control: public, max-age=31536000, immutable`. Replaces former invariant "no new HTTP route" (held pre-`add-disk-backed-image-assets`).
+- **Bridge→server carries base64 once** (localhost WS — cheap). Server→browser leg serves bytes over HTTP with streaming + native caching — no base64 blob in WS, no base64 in browser heap.
+- **Client builds URL from hash token alone.** `assetUrl(hash)` = `/api/assets/${hash}` (extensionless). No mimeType lookup client-side → rendering survives cold server restart (token persists in message text; file + index persist on disk). `SessionAssetsContext` holds `{mimeType}` only, not bytes.
+- **Capability-token auth.** 16-hex-char hash = 64-bit capability. Only browsers subscribed to a session learn the `pi-asset:<hash>` token; the route returns 404 for unknown/malformed hashes. Path-traversal guard: `readAsset` rejects non-`/^[0-9a-f]{16}$/` params. Tunneled (zrok) requests require JWT like every other REST route.
+- **Bandwidth-bounded streaming.** Each unique image's bytes sent exactly once per session via `asset_register`. Subsequent `message_update` chunks re-ship only the short `pi-asset:<hash>` token (~25 chars).
+- **Asset registry lives on `Session.assets`** (mimeType only, in-memory). Subscription replay (`replaySessionAssets`) re-emits one `asset_register { hash, mimeType }` per entry WITHOUT data BEFORE events array, so reconnecting browsers know which hashes resolve. Bytes fetched lazily via HTTP on render.
+- **GC.** `gcAssetStore(maxBytes)` evicts least-recently-written files over cap (LRU by mtime) + prunes `index.json` entries for evicted files. Best-effort; called on server start.
+- **Math plugin chain.** `MarkdownContent.tsx` registers `remarkPlugins: [remarkGfm, remarkMath]` and `rehypePlugins: [rehypeRaw, [rehypeKatex, { throwOnError: false }], stripReactRefAttributes]`. `rehypeRaw` runs FIRST (so embedded HTML parsed before KaTeX emits its own). `throwOnError:false` keeps streaming half-formed expressions like `$x = 10 +` from crashing render. `urlTransform={(v)=>v}` disables ReactMarkdown default scheme-stripping so `pi-asset:` + `data:` srcs reach `img` override intact.
 
-Failure modes (placeholders are visible, not silent):
+Failure modes (placeholders visible, not silent):
 
 | Condition | Placeholder text |
 |---|---|
 | File missing or unreadable (ENOENT/EACCES) | `[image not found: <originalSrc>]` |
-| Path resolves to a directory or other non-file | `[image read failed: <originalSrc>]` |
+| Path resolves to directory or non-file | `[image read failed: <originalSrc>]` |
 | Extension not in image allowlist | `[unsupported image type: <originalSrc>]` |
 | File > 5 MB | `[image too large: <originalSrc> (<sizeInMB> MB)]` |
 | Per-message budget (20 MB new bytes) exhausted | `[message asset budget exhausted: <originalSrc>]` |
-| `pi-asset:<hash>` arrived before its `asset_register` | dashed-bordered `⦿ <alt> (loading…)` span; auto-swaps when bytes arrive |
+| `pi-asset:<hash>` token rendered before `asset_register` arrived | dashed-bordered `⦿ <alt> (loading…)` span; swaps to `<img>` once hash registered (bytes fetched lazily via HTTP) |
+| `GET /api/assets/:hash` returns 404 (file GC'd / never persisted) | broken `<img>` (browser native); hash still known so no placeholder swap |
 
-See change: `chat-markdown-local-images-and-math`.
+See changes: `chat-markdown-local-images-and-math`, `add-disk-backed-image-assets`, `add-show-image-tool`.
 
 ### Edit Tool Diff Rendering (desktop vs mobile)
 `ToolCallStep` gates renderer mounting with `{expanded && <Renderer />}` — Edit cards default to collapsed, so no diff tokenization runs until the user expands. On expand, `EditToolRenderer` branches on `useMobile()` (the project-wide `width < 768px OR height < 600px` predicate):

@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } from "react";
 import { Icon } from "@mdi/react";
-import { mdiFlash, mdiClipboardText, mdiWrench, mdiFolder, mdiFile, mdiStop, mdiAlert, mdiConsole, mdiClose, mdiSend } from "@mdi/js";
+import { mdiFlash, mdiClipboardText, mdiWrench, mdiFolder, mdiFile, mdiStop, mdiAlert, mdiConsole, mdiClose, mdiSend, mdiPaperclip } from "@mdi/js";
 import type { CommandInfo, ImageContent, FileEntry } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 import { useImagePaste } from "../hooks/useImagePaste.js";
 import { ImagePreviewStrip } from "./ImagePreviewStrip.js";
@@ -172,12 +172,14 @@ export function CommandInput({ commands: externalCommands, onSend, onListFiles, 
   }, [sessionId]);
   // Controlled when caller passes `images` (App lifts state per-session);
   // uncontrolled otherwise (legacy / tests).
-  const { pendingImages, imageError, handlePaste, removeImage, clearImages } = useImagePaste(
+  const { pendingImages, imageError, handlePaste, addFiles, removeImage, clearImages } = useImagePaste(
     images !== undefined ? { images, onImagesChange } : undefined,
   );
   const [dismissed, setDismissed] = useState<string | null>(null); // text value when Escape was pressed
   const prevDropdownKeyRef = useRef<string>(""); // tracks mode+filter to reset selectedIndex
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [dragOver, setDragOver] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastFileQueryRef = useRef<string | null>(null);
 
@@ -290,6 +292,35 @@ export function CommandInput({ commands: externalCommands, onSend, onListFiles, 
       }
     }
   }, [text, pendingImages, onSend, clearImages]);
+
+  // File-picker (paperclip) + drag-and-drop both funnel through the shared
+  // `addFiles` from useImagePaste, so validation + preview are identical to
+  // clipboard paste.
+  const handleFilePick = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) addFiles(files);
+    // Reset so picking the same file again re-triggers onChange.
+    e.target.value = "";
+  }, [addFiles]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) addFiles(files);
+  }, [addFiles]);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer?.types?.includes("Files")) {
+      e.preventDefault();
+      setDragOver(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    // Only clear when leaving the container (not when crossing a child).
+    if (e.currentTarget === e.target) setDragOver(false);
+  }, []);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -425,7 +456,31 @@ export function CommandInput({ commands: externalCommands, onSend, onListFiles, 
   // Explore dialog can reuse the exact same behavior.
 
   return (
-    <div className="border-t border-[var(--border-primary)] p-3 relative" style={{ paddingBottom: keyboardUp ? '0.75rem' : 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
+    <div
+      className={`border-t border-[var(--border-primary)] p-3 relative transition-colors ${dragOver ? "bg-[var(--bg-hover)] ring-2 ring-blue-500/50 rounded-t-lg" : ""}`}
+      style={{ paddingBottom: keyboardUp ? '0.75rem' : 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Drag overlay hint */}
+      {dragOver && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
+          <span className="text-sm text-blue-300 bg-[var(--bg-secondary)]/90 px-3 py-1.5 rounded-lg border border-blue-500/50">
+            Drop images to attach
+          </span>
+        </div>
+      )}
+      {/* Hidden file-picker input — opened by the paperclip button. On mobile
+          accept="image/*" offers both camera and gallery. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={handleFilePick}
+      />
       {/* Autocomplete dropdown */}
       {dropdownMode === "command" && (
         <div className="absolute bottom-full left-3 right-3 mb-1 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl max-h-64 overflow-y-auto shadow-lg z-10">
@@ -476,6 +531,16 @@ export function CommandInput({ commands: externalCommands, onSend, onListFiles, 
       <ImagePreviewStrip images={pendingImages} error={imageError} onRemove={removeImage} />
 
       <div className="flex gap-2">
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={disabled || pendingPrompt}
+          className="p-2 text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] active:bg-[var(--bg-tertiary)] active:scale-95 rounded-lg disabled:opacity-30 disabled:cursor-not-allowed self-center transition-all"
+          title="Attach image"
+          aria-label="Attach image"
+          data-testid="attach-image-button"
+        >
+          <Icon path={mdiPaperclip} size={0.65} />
+        </button>
         <textarea
           ref={inputRef}
           value={text}

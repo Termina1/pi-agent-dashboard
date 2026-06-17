@@ -109,10 +109,12 @@ export interface DashboardSession {
    * `asset_register` events emitted by the bridge for local-file images
    * referenced as `![](path)` in assistant markdown. Survives event-buffer
    * eviction (lives on Session, not in the rolling event buffer) so
-   * `pi-asset:<hash>` references in older messages still resolve.
-   * See change: chat-markdown-local-images-and-math.
+   * `pi-asset:<hash>` references in older messages still resolve. Bytes are
+   * persisted to disk by the server (`asset-store.ts`) and served via
+   * `GET /api/assets/:hash`; only the MIME type is held in memory here.
+   * See changes: chat-markdown-local-images-and-math, add-disk-backed-image-assets.
    */
-  assets?: Record<string, { data: string; mimeType: string }>;
+  assets?: Record<string, { mimeType: string; data?: string }>;
   /** Per-session push notification preferences (bell toggle). In-memory, not persisted. */
   pushPrefs?: { notifyCompletion: "off" | "on" | "auto" };
 }

@@ -8,6 +8,8 @@ import { GetSubagentResultRenderer } from "./GetSubagentResultRenderer.js";
 import { SteerSubagentRenderer } from "./SteerSubagentRenderer.js";
 import { GenericToolRenderer } from "./GenericToolRenderer.js";
 import { AskUserToolRenderer } from "./AskUserToolRenderer.js";
+import { PlannotatorSubmitPlanRenderer } from "./PlannotatorSubmitPlanRenderer.js";
+import { ShowImageToolRenderer } from "./ShowImageToolRenderer.js";
 
 const renderers = new Map<string, ToolRenderer>([
   ["read", ReadToolRenderer],
@@ -18,6 +20,8 @@ const renderers = new Map<string, ToolRenderer>([
   ["get_subagent_result", GetSubagentResultRenderer],
   ["steer_subagent", SteerSubagentRenderer],
   ["ask_user", AskUserToolRenderer],
+  ["plannotator_submit_plan", PlannotatorSubmitPlanRenderer],
+  ["show_image", ShowImageToolRenderer],
 ]);
 
 /** Register a custom renderer for a tool name */

@@ -196,6 +196,23 @@ describe("ToolCallStep", () => {
     });
   });
 
+  describe("show_image auto-expand behavior", () => {
+    function isExpanded(container: HTMLElement): boolean {
+      return container.querySelector(".overflow-x-auto") !== null;
+    }
+
+    it("auto-expands show_image so the figure is visible immediately", () => {
+      const { container } = renderStep({
+        toolName: "show_image",
+        toolCallId: "tc-show",
+        args: { path: "/tmp/shot.png" },
+        status: "complete",
+        toolDetails: { hash: "abc123", mimeType: "image/png" },
+      });
+      expect(isExpanded(container)).toBe(true);
+    });
+  });
+
   it("opens lightbox when clicking a tool result image", () => {
     const { container } = renderStep({
       toolName: "read",

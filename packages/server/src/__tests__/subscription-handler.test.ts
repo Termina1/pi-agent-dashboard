@@ -326,13 +326,13 @@ describe("replaySessionAssets — emits one asset_register per Session.assets en
     expect((ctx.sendTo as any).mock.calls).toHaveLength(0);
   });
 
-  it("sends one asset_register per asset on the session", () => {
+  it("sends one asset_register per asset on the session (no base64 data)", () => {
     const ctx = createMockContext();
     ctx.sessionManager.register({ id: "s1", cwd: "/c", source: "dashboard" } as any);
     ctx.sessionManager.update("s1", {
       assets: {
-        abc: { data: "AAAA", mimeType: "image/png" },
-        def: { data: "BBBB", mimeType: "image/svg+xml" },
+        abc: { mimeType: "image/png" },
+        def: { mimeType: "image/svg+xml" },
       },
     } as any);
     const ws = {} as any;
@@ -341,8 +341,10 @@ describe("replaySessionAssets — emits one asset_register per Session.assets en
     const assetMsgs = calls.filter(([, m]) => m.type === "asset_register");
     expect(assetMsgs).toHaveLength(2);
     const byHash = Object.fromEntries(assetMsgs.map(([, m]: any) => [m.hash, m]));
-    expect(byHash.abc).toMatchObject({ data: "AAAA", mimeType: "image/png", sessionId: "s1" });
-    expect(byHash.def).toMatchObject({ data: "BBBB", mimeType: "image/svg+xml", sessionId: "s1" });
+    expect(byHash.abc).toMatchObject({ mimeType: "image/png", sessionId: "s1" });
+    expect(byHash.def).toMatchObject({ mimeType: "image/svg+xml", sessionId: "s1" });
+    // Bytes are NOT forwarded — clients fetch via /api/assets/:hash.
+    expect(byHash.abc.data).toBeUndefined();
   });
 
   it("skips malformed asset entries defensively", () => {
@@ -351,8 +353,8 @@ describe("replaySessionAssets — emits one asset_register per Session.assets en
     // Force a malformed entry past the type check.
     ctx.sessionManager.update("s1", {
       assets: {
-        good: { data: "AAAA", mimeType: "image/png" },
-        bad: { data: 123, mimeType: "image/png" } as any,
+        good: { mimeType: "image/png" },
+        bad: { mimeType: 123 } as any,
       },
     } as any);
     replaySessionAssets({} as any, "s1", ctx);
@@ -368,7 +370,7 @@ describe("handleSubscribe — asset replay precedes events", () => {
     const ctx = createMockContext();
     ctx.sessionManager.register({ id: "s1", cwd: "/c", source: "dashboard" } as any);
     ctx.sessionManager.update("s1", {
-      assets: { h1: { data: "AAAA", mimeType: "image/png" } },
+      assets: { h1: { mimeType: "image/png" } },
     } as any);
     ctx.eventStore.insertEvent("s1", makeEvent("message_update"));
 

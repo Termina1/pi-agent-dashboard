@@ -36,6 +36,7 @@ const toolSummaries: Record<string, (args?: Record<string, unknown>) => string> 
   Agent: (args) => `${args?.subagent_type ?? "Agent"}: ${String(args?.description ?? "").slice(0, 60)}`,
   get_subagent_result: (args) => `Get result: ${String(args?.agent_id ?? "").slice(0, 30)}`,
   steer_subagent: (args) => `Steer: ${String(args?.agent_id ?? "").slice(0, 30)}`,
+  plannotator_submit_plan: (args) => `Review plan: ${String(args?.filePath ?? "plan").slice(0, 60)}`,
 };
 
 function getSummary(toolName: string, args?: Record<string, unknown>): string {
@@ -56,7 +57,12 @@ export function ToolCallStep({ toolName, toolCallId, args, status, result, image
   const isAgentRunning = toolName === "Agent" && status === "running";
   const isAskUser = toolName === "ask_user";
   const isFailedAskUser = isAskUser && status === "error";
-  const [expanded, setExpanded] = useState(hasImages || isAgentRunning || (isAskUser && !isFailedAskUser));
+  const isPlannotatorReview = toolName === "plannotator_submit_plan" && status === "running";
+  // show_image renders a large inline figure — expand it immediately so the
+  // image is visible without a click (the figure is the whole point of the
+  // tool call). See change: add-show-image-tool.
+  const isShowImage = toolName === "show_image";
+  const [expanded, setExpanded] = useState(hasImages || isAgentRunning || isPlannotatorReview || (isAskUser && !isFailedAskUser) || isShowImage);
   const [stopState, setStopState] = useState<StopState>("idle");
   const Renderer = getToolRenderer(toolName);
 
