@@ -22,3 +22,6 @@ site/.astro/
 !.pi/.gitignore
 seed/active-project/repo/
 seed/active-project/worktrees/
+
+# Recraft image-generation output (debug artifacts)
+recraft-output/
