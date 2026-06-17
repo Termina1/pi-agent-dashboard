@@ -73,14 +73,6 @@ export function isExtensionSlashCommand(
   return commandList.some((c) => c?.name === cmdName && c?.source === "extension");
 }
 
-/**
- * Feature-detect upstream `pi.dispatchCommand(text, opts)` (pi 0.71+).
- * Returns true iff the field is a function on the supplied object.
- * See change: fix-extension-slash-commands-in-dashboard.
- */
-export function hasDispatchCommand(pi: unknown): boolean {
-  return typeof (pi as any)?.dispatchCommand === "function";
-}
 
 /** Extract first user message text from session entries */
 export function extractFirstMessage(ctx: any): string | undefined {

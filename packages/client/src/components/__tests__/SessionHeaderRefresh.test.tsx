@@ -54,4 +54,17 @@ describe("SessionHeader refresh button", () => {
     fireEvent.click(screen.getByTitle("Refresh chat"));
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
+
+  it("does not render Plannotator plan button for metadata-only extension commands", () => {
+    const onSendPrompt = vi.fn();
+    render(
+      <SessionHeader
+        session={makeSession()}
+        state={createInitialState()}
+        commands={[{ name: "plannotator", source: "extension" }]}
+        onSendPrompt={onSendPrompt}
+      />,
+    );
+    expect(screen.queryByTestId("plannotator-plan-mode-button")).toBeNull();
+  });
 });
