@@ -603,7 +603,7 @@ export function addInteractiveRequest(
   // (recursive proxy generates multiple requestIds for the same dialog)
   if (state.interactiveRequests.some((r) =>
     r.requestId === requestId ||
-    (r.status === "pending" && r.method === method && r.params.title === params.title),
+    (method !== "notify" && r.status === "pending" && r.method === method && r.params.title === params.title),
   )) {
     return state;
   }

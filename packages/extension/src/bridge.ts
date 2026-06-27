@@ -6,8 +6,9 @@
  */
 // When Plannotator runs under the dashboard bridge, prefer a browser-visible
 // review URL over trying to open a browser on the agent host. The dashboard
-// renders ctx.ui.notify messages as inline cards and rewrites loopback hosts
-// client-side, so remote/LAN users get a clickable plan-review link.
+// renders ctx.ui.notify messages as inline cards and proxies the fixed remote
+// Plannotator port under /plannotator, so remote/LAN users get a clickable
+// same-origin plan-review link.
 process.env.PLANNOTATOR_REMOTE ??= "1";
 process.env.PLANNOTATOR_BROWSER ??= "none";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

@@ -40,6 +40,7 @@
 | `packages/client/src/hooks/usePiChangelog.ts` | Lazy hook (enabled gate). Refetches on `pi_core_update_complete` WS event for matching `pkg`. Never throws. See change: pi-update-whats-new-panel. |
 | `packages/client/src/components/WhatsNewDialog.tsx` | What's-new modal via `DialogPortal`. Pinned Breaking section. Collapsible features / other sections. GitHub footer link. Update CTA. See change: pi-update-whats-new-panel. |
 | `packages/client/src/lib/pi-core-api.ts` | `fetchPiChangelog(pkg, from, to, signal?)` helper against `/api/pi-core/changelog`. See change: pi-update-whats-new-panel. |
+| `packages/client/src/lib/plannotator-url.ts` | Maps Plannotator localhost/current-host `:19432` review URLs to same-origin `/plannotator` proxy route. |
 | `packages/client/src/components/BootstrapBanner.tsx` | Banner mounted in `App.tsx` above `<MobileShell>`. Hidden at status="ready" with no compatibility hints; blue "Installing pi…" when installing; red "pi install failed — [Retry]" when failed; amber upgrade hints when `compatibility.upgradeRecommended` or `upgradeDashboard` is true. |
 | `src/client/lib/tools-api.ts` | Client-side fetch helpers for `/api/tools*` (`fetchTools`, `rescanAll`, `rescanOne`, `setOverride`, `clearOverride`, `downloadDiagnostics`) |
 | `src/client/components/ToolsSection.tsx` | Settings → General → **Tools** section. One row per registered tool: status badge, source, truncated path, expand-to-trail, override input, per-row rescan. Top-level: Rescan all / Reset overrides / Export diagnostics |

@@ -1,13 +1,6 @@
 import React from "react";
 import type { ToolRendererProps } from "./types.js";
-
-const DEFAULT_PLANNOTATOR_PORT = "19432";
-
-function getBrowserReviewUrl(): string {
-  if (typeof window === "undefined") return `http://localhost:${DEFAULT_PLANNOTATOR_PORT}`;
-  const protocol = window.location.protocol === "https:" ? "https:" : "http:";
-  return `${protocol}//${window.location.hostname}:${DEFAULT_PLANNOTATOR_PORT}`;
-}
+import { normalizePlannotatorReviewUrl } from "../../lib/plannotator-url.js";
 
 function extractUrl(value: unknown): string | null {
   if (typeof value === "string") return value.match(/https?:\/\/[^\s)\]]+/)?.[0] ?? null;
@@ -22,7 +15,7 @@ function extractUrl(value: unknown): string | null {
 export function PlannotatorSubmitPlanRenderer({ args, status, result, toolDetails }: ToolRendererProps) {
   const submittedPath = typeof args?.filePath === "string" ? args.filePath : "the submitted plan";
   const discoveredUrl = extractUrl(toolDetails) ?? extractUrl(result);
-  const reviewUrl = discoveredUrl ?? getBrowserReviewUrl();
+  const reviewUrl = normalizePlannotatorReviewUrl(discoveredUrl);
 
   if (status === "running") {
     return (

@@ -51,6 +51,7 @@ import { registerSessionRoutes } from "./routes/session-routes.js";
 import { registerGitRoutes } from "./routes/git-routes.js";
 import { registerFileRoutes } from "./routes/file-routes.js";
 import { registerAssetRoutes } from "./routes/asset-routes.js";
+import { registerPlannotatorProxyRoutes } from "./routes/plannotator-proxy-routes.js";
 import { registerOpenSpecRoutes } from "./routes/openspec-routes.js";
 import { registerOpenSpecGroupRoutes } from "./routes/openspec-group-routes.js";
 import { createOpenSpecGroupStore, joinGroupIdsToOpenSpecData } from "./openspec-group-store.js";
@@ -791,6 +792,7 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
   registerGitRoutes(fastify, { networkGuard });
   registerFileRoutes(fastify, { sessionManager, preferencesStore, networkGuard });
   registerAssetRoutes(fastify, { networkGuard });
+  registerPlannotatorProxyRoutes(fastify, { networkGuard });
   registerOpenSpecRoutes(fastify, {
     sessionManager,
     preferencesStore,
