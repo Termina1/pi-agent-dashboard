@@ -1782,9 +1782,11 @@ describe("turnIndex tracking", () => {
       },
     ]);
 
-    // First stats_update assigns turnIndex 0, second sees it's already set and skips
+    // First stats_update assigns turnIndex 0, second merges into the same turn stat
     expect(state.messages[0].turnIndex).toBe(0);
     expect(state.turnCount).toBe(1);
+    expect(state.turnStats).toHaveLength(1);
+    expect(state.turnStats[0]).toMatchObject({ input: 200, output: 100 });
   });
 
   it("should store entryId on user message from message_start", () => {

@@ -1144,14 +1144,21 @@ export function reduceEvent(state: SessionState, event: DashboardEvent): Session
       // Extract per-turn usage and accumulate cache stats
       const turnUsage = data.turnUsage as Record<string, number> | undefined;
       if (turnUsage) {
-        // Assign turnIndex to the last user message for scroll-to-turn navigation
+        // Assign turnIndex to the last user message for scroll-to-turn navigation.
+        // Multiple LLM calls can happen for one user prompt; merge those
+        // stats into the same indexed bar instead of adding orphan `-1` bars.
         const lastUserIdx = next.messages.findLastIndex((m) => m.role === "user");
         let assignedTurnIndex = -1;
-        if (lastUserIdx !== -1 && next.messages[lastUserIdx].turnIndex === undefined) {
-          assignedTurnIndex = next.turnCount;
-          next.messages = [...next.messages];
-          next.messages[lastUserIdx] = { ...next.messages[lastUserIdx], turnIndex: next.turnCount };
-          next.turnCount += 1;
+        if (lastUserIdx !== -1) {
+          const existingTurnIndex = next.messages[lastUserIdx].turnIndex;
+          if (existingTurnIndex === undefined) {
+            assignedTurnIndex = next.turnCount;
+            next.messages = [...next.messages];
+            next.messages[lastUserIdx] = { ...next.messages[lastUserIdx], turnIndex: next.turnCount };
+            next.turnCount += 1;
+          } else {
+            assignedTurnIndex = existingTurnIndex;
+          }
         }
 
         const turnStat: TurnStat = {
@@ -1161,7 +1168,23 @@ export function reduceEvent(state: SessionState, event: DashboardEvent): Session
           cacheWrite: turnUsage.cacheWrite ?? 0,
           turnIndex: assignedTurnIndex,
         };
-        next.turnStats = [...next.turnStats, turnStat].slice(-MAX_TURN_STATS);
+        const existingStatIdx = assignedTurnIndex >= 0
+          ? next.turnStats.findIndex((turn) => turn.turnIndex === assignedTurnIndex)
+          : -1;
+        if (existingStatIdx >= 0) {
+          next.turnStats = next.turnStats.map((turn, idx) => idx === existingStatIdx
+            ? {
+                ...turn,
+                input: turn.input + turnStat.input,
+                output: turn.output + turnStat.output,
+                cacheRead: turn.cacheRead + turnStat.cacheRead,
+                cacheWrite: turn.cacheWrite + turnStat.cacheWrite,
+              }
+            : turn,
+          );
+        } else {
+          next.turnStats = [...next.turnStats, turnStat].slice(-MAX_TURN_STATS);
+        }
         next.cacheRead += turnStat.cacheRead;
         next.cacheWrite += turnStat.cacheWrite;
       }
