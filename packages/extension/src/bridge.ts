@@ -6,11 +6,16 @@
  */
 // When Plannotator runs under the dashboard bridge, prefer a browser-visible
 // review URL over trying to open a browser on the agent host. The dashboard
-// renders ctx.ui.notify messages as inline cards and proxies the fixed remote
-// Plannotator port under /plannotator, so remote/LAN users get a clickable
-// same-origin plan-review link.
+// proxies the fixed remote Plannotator port under /plannotator so tool cards
+// can expose same-origin plan-review links.
 process.env.PLANNOTATOR_REMOTE ??= "1";
 process.env.PLANNOTATOR_BROWSER ??= "none";
+
+function isPlannotatorNotifyMessage(message: string): boolean {
+  const text = message.toLowerCase();
+  return text.includes("plannotator") || text.includes(":19432") || text.includes("/plannotator");
+}
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Loader } from "@earendil-works/pi-tui";
 import { ConnectionManager } from "./connection.js";
@@ -1317,9 +1322,12 @@ function initBridge(pi: ExtensionAPI) {
           metadata: opts?.message ? { message: opts.message } : undefined,
         }).then(decodeMultiselectAnswer);
 
-      // Notify is fire-and-forget: call original + forward to dashboard
+      // Notify is fire-and-forget: call original + forward to dashboard.
+      // Plannotator review links are surfaced by the submit-plan tool card;
+      // suppress its noisy notify cards entirely.
       (ctx.ui as any).notify = (message: string, level?: string) => {
         originalNotify?.(message, level);
+        if (isPlannotatorNotifyMessage(message)) return;
         connection.send({
           type: "prompt_request" as any,
           sessionId,

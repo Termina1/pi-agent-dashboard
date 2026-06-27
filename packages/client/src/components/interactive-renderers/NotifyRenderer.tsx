@@ -26,12 +26,9 @@ function normalizeUrlForCurrentBrowser(raw: string): string {
 
 const urlRe = /https?:\/\/[^\s)\]]+/g;
 
-function extractPlannotatorLink(text: string): string | null {
-  for (const match of text.matchAll(urlRe)) {
-    const proxied = toPlannotatorProxyUrl(match[0]);
-    if (proxied) return proxied;
-  }
-  return null;
+function isPlannotatorNotifyText(text: string): boolean {
+  const lower = text.toLowerCase();
+  return lower.includes("plannotator") || lower.includes(":19432") || lower.includes("/plannotator");
 }
 
 function renderMessageWithLinks(message: unknown) {
@@ -64,24 +61,8 @@ export function NotifyRenderer({ params }: InteractiveRendererProps) {
   const message = params.message ?? params.title ?? params.text ?? "";
   const text = typeof message === "string" ? message : message == null ? "" : String(message);
   const level = ((params.level ?? params.notifyType ?? "info") as string);
-  const plannotatorLink = extractPlannotatorLink(text);
 
-  if (plannotatorLink) {
-    return (
-      <div className="mx-4 my-2 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-2 text-xs text-[var(--text-secondary)]">
-        <div className="font-medium text-blue-300">Plannotator review ready</div>
-        <div className="mt-0.5">This appears each time a plan is submitted for review.</div>
-        <a
-          href={plannotatorLink}
-          target="_blank"
-          rel="noreferrer"
-          className="mt-1 inline-flex rounded-md border border-blue-400/40 bg-blue-500/10 px-2 py-1 text-blue-200 hover:bg-blue-500/20"
-        >
-          Open Plannotator review
-        </a>
-      </div>
-    );
-  }
+  if (isPlannotatorNotifyText(text)) return null;
 
   return (
     <div className={`mx-4 my-1 text-xs whitespace-pre-wrap ${levelColors[level] ?? "text-[var(--text-secondary)]"}`}>

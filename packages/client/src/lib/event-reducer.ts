@@ -588,6 +588,15 @@ export function truncateLines(text: string | unknown, maxLines: number): string 
  *
  * See change: fix-interactive-ui-reorder.
  */
+function isPlannotatorNotifyRequest(method: string, params: Record<string, unknown>): boolean {
+  if (method !== "notify") return false;
+  const text = [params.title, params.message, params.text]
+    .filter((value): value is string => typeof value === "string")
+    .join("\n")
+    .toLowerCase();
+  return text.includes("plannotator") || text.includes(":19432") || text.includes("/plannotator");
+}
+
 export function addInteractiveRequest(
   state: SessionState,
   requestId: string,
@@ -595,6 +604,8 @@ export function addInteractiveRequest(
   params: Record<string, unknown>,
   toolCallId?: string,
 ): SessionState {
+  if (isPlannotatorNotifyRequest(method, params)) return state;
+
   // Architect suppression logic REMOVED — the PromptBus now ensures each prompt
   // is sent to the dashboard exactly once, with the correct component.
   // No more client-side guessing about which prompts to suppress.

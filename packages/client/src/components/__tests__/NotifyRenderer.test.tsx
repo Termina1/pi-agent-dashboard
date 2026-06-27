@@ -4,7 +4,7 @@ import React from "react";
 import { NotifyRenderer } from "../interactive-renderers/NotifyRenderer.js";
 
 describe("NotifyRenderer", () => {
-  it("rewrites Plannotator localhost links to the dashboard proxy route", () => {
+  it("renders nothing for Plannotator review notifications", () => {
     const { container } = render(
       <NotifyRenderer
         requestId="n1"
@@ -16,10 +16,7 @@ describe("NotifyRenderer", () => {
       />,
     );
 
-    expect(container.textContent).toContain("Plannotator review ready");
-    expect(container.textContent).toContain("each time a plan is submitted");
-    const link = container.querySelector("a");
-    expect(link?.getAttribute("href")).toBe("/plannotator/");
-    expect(link?.textContent).toBe("Open Plannotator review");
+    expect(container.textContent).toBe("");
+    expect(container.querySelector("a")).toBeNull();
   });
 });
