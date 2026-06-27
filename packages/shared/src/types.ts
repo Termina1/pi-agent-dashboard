@@ -6,11 +6,25 @@ export type SessionStatus = "active" | "idle" | "streaming" | "ended";
 
 export type PlannotatorPhase = "idle" | "planning" | "executing";
 
+export const PLANNOTATOR_SESSION_PORT_BASE = 20_000;
+export const PLANNOTATOR_SESSION_PORT_RANGE = 20_000;
+
+export function derivePlannotatorSessionPort(sessionId: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < sessionId.length; i++) {
+    hash ^= sessionId.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return PLANNOTATOR_SESSION_PORT_BASE + ((hash >>> 0) % PLANNOTATOR_SESSION_PORT_RANGE);
+}
+
 export interface PlannotatorStatus {
   /** False means the bridge could not verify live Plannotator state. UI must not treat this as off. */
   available: boolean;
   /** Live phase returned by Plannotator when available. */
   phase?: PlannotatorPhase;
+  /** Loopback port assigned to this session's Plannotator review server. */
+  port?: number;
   /** Server timestamp of the latest live status probe. */
   updatedAt?: number;
   /** Probe failure detail when available is false. */

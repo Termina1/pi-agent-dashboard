@@ -757,6 +757,7 @@ export function wireEvents(deps: EventWiringDeps): void {
       const plannotator = {
         available: msg.available === true,
         ...(msg.phase ? { phase: msg.phase } : {}),
+        ...(typeof msg.port === "number" ? { port: msg.port } : {}),
         updatedAt: Date.now(),
         ...(msg.error ? { error: msg.error } : {}),
       };

@@ -26,11 +26,6 @@ function normalizeUrlForCurrentBrowser(raw: string): string {
 
 const urlRe = /https?:\/\/[^\s)\]]+/g;
 
-function isPlannotatorNotifyText(text: string): boolean {
-  const lower = text.toLowerCase();
-  return lower.includes("plannotator") || lower.includes(":19432") || lower.includes("/plannotator");
-}
-
 function renderMessageWithLinks(message: unknown) {
   const text = typeof message === "string" ? message : message == null ? "" : String(message);
   const parts: React.ReactNode[] = [];
@@ -61,8 +56,6 @@ export function NotifyRenderer({ params }: InteractiveRendererProps) {
   const message = params.message ?? params.title ?? params.text ?? "";
   const text = typeof message === "string" ? message : message == null ? "" : String(message);
   const level = ((params.level ?? params.notifyType ?? "info") as string);
-
-  if (isPlannotatorNotifyText(text)) return null;
 
   return (
     <div className={`mx-4 my-1 text-xs whitespace-pre-wrap ${levelColors[level] ?? "text-[var(--text-secondary)]"}`}>

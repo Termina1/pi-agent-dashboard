@@ -65,6 +65,7 @@ describe("plannotator_status — server wiring", () => {
       sessionId: "p1",
       available: true,
       phase: "planning",
+      port: 23456,
     }));
 
     await wait(80);
@@ -72,6 +73,7 @@ describe("plannotator_status — server wiring", () => {
     expect(server.sessionManager.get("p1")?.plannotator).toMatchObject({
       available: true,
       phase: "planning",
+      port: 23456,
     });
     const statusUpdate = browserMessages.find(
       (msg) => msg.type === "session_updated" && msg.sessionId === "p1" && msg.updates?.plannotator,
@@ -79,6 +81,7 @@ describe("plannotator_status — server wiring", () => {
     expect(statusUpdate?.updates.plannotator).toMatchObject({
       available: true,
       phase: "planning",
+      port: 23456,
     });
 
     piWs.close();

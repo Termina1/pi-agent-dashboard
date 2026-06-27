@@ -545,9 +545,11 @@ export default function App() {
   const editorCwds = useMemo(() => selectedCwd ? [selectedCwd] : [], [selectedCwd]);
   const editorMap = useEditors(editorCwds);
   const toolContext: ToolContext = useMemo(() => ({
+    sessionId: selectedId,
     cwd: selectedCwd,
     editors: selectedCwd ? editorMap.get(selectedCwd) ?? [] : [],
-  }), [selectedCwd, editorMap]);
+    plannotatorPort: selectedSession?.plannotator?.port,
+  }), [selectedId, selectedCwd, editorMap, selectedSession?.plannotator?.port]);
 
   const contextUsageMap = useMemo(() => {
     const map = new Map<string, ContextUsageInfo>();

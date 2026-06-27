@@ -45,7 +45,7 @@ import { registerShowImageTool } from "./show-image-tool.js";
 import { registerShowFileTool } from "./show-file-tool.js";
 import { decodeMultiselectAnswer } from "./multiselect-decode.js";
 import { activate as activateProviderRegister, onProviderChanged, reloadProviders, buildProviderCatalogue } from "./provider-register.js";
-import type { FlowInfo, PlannotatorPhase } from "@blackbelt-technology/pi-dashboard-shared/types.js";
+import { derivePlannotatorSessionPort, type FlowInfo, type PlannotatorPhase } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 import { startMetricsMonitor, stopMetricsMonitor, collectMetrics } from "./process-metrics.js";
 import { scanChildProcesses } from "./process-scanner.js";
 import type { BridgeContext } from "./bridge-context.js";
@@ -261,6 +261,8 @@ function initBridge(pi: ExtensionAPI) {
   let lastThinkingLevel: string | undefined;
   let hasRegisteredOnce = false; // see change: reattach-move-to-front
   let promptBus: PromptBus | undefined;
+  let plannotatorPort = derivePlannotatorSessionPort(sessionId);
+  process.env.PLANNOTATOR_PORT = String(plannotatorPort);
   let origEventsEmit: ((channel: string, data: unknown) => void) | undefined;
   let lastPlannotatorStatusKey = "";
   let plannotatorStatusInFlight = false;
@@ -716,15 +718,23 @@ function initBridge(pi: ExtensionAPI) {
     }),
   });
 
+  function setPlannotatorPortForSession(nextSessionId: string): number {
+    const port = derivePlannotatorSessionPort(nextSessionId);
+    plannotatorPort = port;
+    process.env.PLANNOTATOR_PORT = String(port);
+    return port;
+  }
+
   function emitPlannotatorStatus(payload: { available: boolean; phase?: PlannotatorPhase; error?: string }, force = false): void {
     if (!isActive() || !sessionReady) return;
-    const key = JSON.stringify(payload);
+    const messagePayload = { ...payload, port: plannotatorPort };
+    const key = JSON.stringify(messagePayload);
     if (!force && key === lastPlannotatorStatusKey) return;
     lastPlannotatorStatusKey = key;
     connection.send({
       type: "plannotator_status",
       sessionId,
-      ...payload,
+      ...messagePayload,
     });
   }
 
@@ -1133,6 +1143,7 @@ function initBridge(pi: ExtensionAPI) {
     // Bail out if a newer bridge instance has taken over
     if (!isActive()) return;
     const newSessionId = ctx.sessionManager.getSessionId();
+    setPlannotatorPortForSession(newSessionId);
 
     // Register push_notify_user tool for agent-proactive push (Auto mode).
     // Tool is registered unconditionally; the description is proactive — agents

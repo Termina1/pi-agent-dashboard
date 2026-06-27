@@ -14,6 +14,16 @@ describe("plannotator URL helpers", () => {
     );
   });
 
+  it("maps session-specific localhost review URLs to the session proxy route", () => {
+    expect(toPlannotatorProxyUrl("http://localhost:23456/api/plan?x=1", { sessionId: "s1", port: 23456 })).toBe(
+      `${PLANNOTATOR_PROXY_BASE}/s1/api/plan?x=1`,
+    );
+  });
+
+  it("leaves mismatched session ports alone", () => {
+    expect(toPlannotatorProxyUrl("http://localhost:23457/api/plan?x=1", { sessionId: "s1", port: 23456 })).toBeNull();
+  });
+
   it("leaves non-Plannotator URLs alone", () => {
     expect(toPlannotatorProxyUrl("https://example.com:19432/review")).toBeNull();
     expect(toPlannotatorProxyUrl("https://example.com/review")).toBeNull();

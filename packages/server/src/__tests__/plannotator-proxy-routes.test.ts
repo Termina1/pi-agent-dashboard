@@ -73,6 +73,109 @@ describe("Plannotator proxy routes", () => {
     expect(res.body.length).toBeGreaterThan(2000);
   });
 
+  it("proxies a session-specific Plannotator UI under /plannotator/:sessionId", async () => {
+    upstream = createServer((req, res) => {
+      expect(req.url).toBe("/");
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Location", "/api/plan");
+      res.end(`<link rel="icon" href="/favicon.svg"><script>fetch("/api/plan")</script>`);
+    });
+    const targetPort = await listen(upstream);
+
+    app = Fastify({ logger: false });
+    registerPlannotatorProxyRoutes(app, { networkGuard: async () => {}, targetPort });
+    await app.ready();
+
+    const res = await app.inject({ method: "GET", url: "/plannotator/session-1" });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers.location).toBe("/plannotator/session-1/api/plan");
+    expect(res.body).toContain('href="/plannotator/session-1/favicon.svg"');
+    expect(res.body).toContain('fetch("/plannotator/session-1/api/plan")');
+  });
+
+  it("lets legacy /plannotator/ links use the active Plannotator session port", async () => {
+    upstream = createServer((req, res) => {
+      expect(req.url).toBe("/");
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.end(`<script>fetch("/api/plan")</script>`);
+    });
+    const targetPort = await listen(upstream);
+
+    app = Fastify({ logger: false });
+    registerPlannotatorProxyRoutes(app, {
+      networkGuard: async () => {},
+      sessionManager: {
+        get: () => ({
+          id: "active-plan",
+          status: "active",
+          plannotator: { available: true, phase: "planning", port: targetPort, updatedAt: 200 },
+        }),
+        listAll: () => [{
+          id: "active-plan",
+          status: "active",
+          plannotator: { available: true, phase: "planning", port: targetPort, updatedAt: 200 },
+        }],
+      } as any,
+    });
+    await app.ready();
+
+    const res = await app.inject({ method: "GET", url: "/plannotator/" });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('fetch("/plannotator/active-plan/api/plan")');
+  });
+
+  it("routes different sessions to different Plannotator ports", async () => {
+    const upstreamA = createServer((_req, res) => {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ session: "a" }));
+    });
+    const upstreamB = createServer((_req, res) => {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ session: "b" }));
+    });
+    const portA = await listen(upstreamA);
+    const portB = await listen(upstreamB);
+    upstream = { close: (cb?: (err?: Error) => void) => upstreamA.close(() => upstreamB.close(cb)) } as Server;
+
+    app = Fastify({ logger: false });
+    registerPlannotatorProxyRoutes(app, {
+      networkGuard: async () => {},
+      sessionManager: {
+        get: (sessionId: string) => ({ plannotator: { port: sessionId === "a" ? portA : portB } }),
+      } as any,
+    });
+    await app.ready();
+
+    const resA = await app.inject({ method: "GET", url: "/plannotator/a/api/plan" });
+    const resB = await app.inject({ method: "GET", url: "/plannotator/b/api/plan" });
+
+    expect(JSON.parse(resA.body)).toEqual({ session: "a" });
+    expect(JSON.parse(resB.body)).toEqual({ session: "b" });
+  });
+
+  it("supports the /plannonator/:sessionId spelling as an alias", async () => {
+    upstream = createServer((req, res) => {
+      expect(req.url).toBe("/api/plan?x=1");
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const targetPort = await listen(upstream);
+
+    app = Fastify({ logger: false });
+    registerPlannotatorProxyRoutes(app, { networkGuard: async () => {}, targetPort });
+    await app.ready();
+
+    const res = await app.inject({ method: "GET", url: "/plannonator/session-1/api/plan?x=1" });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ ok: true });
+  });
+
   it("strips the proxy prefix and forwards JSON POST bodies", async () => {
     let observed = { url: "", body: "", contentType: "" };
     upstream = createServer((req, res) => {

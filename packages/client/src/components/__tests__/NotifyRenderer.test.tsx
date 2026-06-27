@@ -4,7 +4,7 @@ import React from "react";
 import { NotifyRenderer } from "../interactive-renderers/NotifyRenderer.js";
 
 describe("NotifyRenderer", () => {
-  it("renders nothing for Plannotator review notifications", () => {
+  it("renders Plannotator review notifications with a usable link", () => {
     const { container } = render(
       <NotifyRenderer
         requestId="n1"
@@ -16,7 +16,7 @@ describe("NotifyRenderer", () => {
       />,
     );
 
-    expect(container.textContent).toBe("");
-    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).toContain("[Plannotator]");
+    expect(container.querySelector("a")?.getAttribute("href")).toBe("/plannotator/");
   });
 });

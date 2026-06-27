@@ -263,6 +263,8 @@ export interface PlannotatorStatusMessage {
   /** False means bridge could not verify live state; clients must not display OFF from this. */
   available: boolean;
   phase?: PlannotatorPhase;
+  /** Loopback port assigned to this session's Plannotator review server. */
+  port?: number;
   error?: string;
 }
 

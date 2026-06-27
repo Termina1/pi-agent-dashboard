@@ -792,7 +792,7 @@ export async function createServer(config: ServerConfig): Promise<DashboardServe
   registerGitRoutes(fastify, { networkGuard });
   registerFileRoutes(fastify, { sessionManager, preferencesStore, networkGuard });
   registerAssetRoutes(fastify, { networkGuard });
-  registerPlannotatorProxyRoutes(fastify, { networkGuard });
+  registerPlannotatorProxyRoutes(fastify, { networkGuard, sessionManager });
   registerOpenSpecRoutes(fastify, {
     sessionManager,
     preferencesStore,

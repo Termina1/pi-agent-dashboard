@@ -12,10 +12,13 @@ function extractUrl(value: unknown): string | null {
   return null;
 }
 
-export function PlannotatorSubmitPlanRenderer({ args, status, result, toolDetails }: ToolRendererProps) {
+export function PlannotatorSubmitPlanRenderer({ args, status, result, toolDetails, context }: ToolRendererProps) {
   const submittedPath = typeof args?.filePath === "string" ? args.filePath : "the submitted plan";
   const discoveredUrl = extractUrl(toolDetails) ?? extractUrl(result);
-  const reviewUrl = normalizePlannotatorReviewUrl(discoveredUrl);
+  const reviewUrl = normalizePlannotatorReviewUrl(discoveredUrl, {
+    sessionId: context.sessionId,
+    port: context.plannotatorPort,
+  });
 
   if (status === "running") {
     return (

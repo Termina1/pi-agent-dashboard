@@ -3,8 +3,10 @@ import type { ChatImage } from "../../lib/event-reducer.js";
 
 /** Context passed to every tool renderer */
 export interface ToolContext {
+  sessionId?: string;
   cwd?: string;
   editors: DetectedEditor[];
+  plannotatorPort?: number;
 }
 
 /** Props every tool renderer receives */
