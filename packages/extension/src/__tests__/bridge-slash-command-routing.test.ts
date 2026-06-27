@@ -100,10 +100,10 @@ describe("bridge slash command routing (regression contract)", () => {
     expect(feedbackEvents(sink, "/review")).toEqual([]);
   });
 
-  it("passthrough text → sendUserMessage called once", async () => {
+  it("passthrough text → sendUserMessage uses steering delivery", async () => {
     const stub = makeStubPi();
     await drive("hello world", stub);
-    expect(stub.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(stub.sendUserMessage).toHaveBeenCalledWith("hello world", { deliverAs: "steer" });
   });
 
   it("unrecognized slash → sendUserMessage called once, no command_feedback", async () => {

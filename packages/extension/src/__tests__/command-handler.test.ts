@@ -15,7 +15,7 @@ describe("CommandHandler", () => {
     };
   }
 
-  it("should call sendUserMessage on send_prompt when idle", async () => {
+  it("should send dashboard prompts with steering delivery semantics", async () => {
     const pi = createMockPi();
     const handler = createCommandHandler(pi as any, "s1");
 
@@ -27,7 +27,7 @@ describe("CommandHandler", () => {
 
     await handler.handle(msg);
 
-    expect(pi.sendUserMessage).toHaveBeenCalledWith("Hello agent", { deliverAs: "followUp" });
+    expect(pi.sendUserMessage).toHaveBeenCalledWith("Hello agent", { deliverAs: "steer" });
   });
 
   it("should ignore messages for different sessionIds", async () => {
@@ -60,7 +60,7 @@ describe("CommandHandler", () => {
     expect(pi.sendUserMessage).toHaveBeenCalledWith([
       { type: "text", text: "check this" },
       { type: "image", data: "abc123", mimeType: "image/png" },
-    ], { deliverAs: "followUp" });
+    ], { deliverAs: "steer" });
   });
 
   it("should drop images with invalid mimeType and send text only", async () => {
@@ -77,7 +77,7 @@ describe("CommandHandler", () => {
     });
 
     // Invalid mimeType → dropped, sends text only
-    expect(pi.sendUserMessage).toHaveBeenCalledWith("check this", { deliverAs: "followUp" });
+    expect(pi.sendUserMessage).toHaveBeenCalledWith("check this", { deliverAs: "steer" });
   });
 
   it("should drop images with undefined or null mimeType", async () => {
@@ -94,7 +94,7 @@ describe("CommandHandler", () => {
       ],
     });
 
-    expect(pi.sendUserMessage).toHaveBeenCalledWith("check this", { deliverAs: "followUp" });
+    expect(pi.sendUserMessage).toHaveBeenCalledWith("check this", { deliverAs: "steer" });
   });
 
   it("should drop images with empty or non-string data", async () => {
@@ -110,7 +110,7 @@ describe("CommandHandler", () => {
       ],
     });
 
-    expect(pi.sendUserMessage).toHaveBeenCalledWith("check this", { deliverAs: "followUp" });
+    expect(pi.sendUserMessage).toHaveBeenCalledWith("check this", { deliverAs: "steer" });
   });
 
   it("should drop non-object image entries", async () => {
@@ -124,7 +124,7 @@ describe("CommandHandler", () => {
       images: [null as any, "bad" as any],
     });
 
-    expect(pi.sendUserMessage).toHaveBeenCalledWith("check this", { deliverAs: "followUp" });
+    expect(pi.sendUserMessage).toHaveBeenCalledWith("check this", { deliverAs: "steer" });
   });
 
   it("should keep valid images and drop invalid ones", async () => {
@@ -146,7 +146,7 @@ describe("CommandHandler", () => {
       { type: "text", text: "check this" },
       { type: "image", data: "good", mimeType: "image/jpeg" },
       { type: "image", data: "also-good", mimeType: "image/webp" },
-    ], { deliverAs: "followUp" });
+    ], { deliverAs: "steer" });
   });
 
   it("should handle rename_session by calling setSessionName and returning confirmation", async () => {
@@ -358,7 +358,7 @@ describe("CommandHandler", () => {
 
     // Message for s1 should work
     await handler.handle({ type: "send_prompt", sessionId: "s1", text: "hello" });
-    expect(pi.sendUserMessage).toHaveBeenCalledWith("hello", { deliverAs: "followUp" });
+    expect(pi.sendUserMessage).toHaveBeenCalledWith("hello", { deliverAs: "steer" });
 
     pi.sendUserMessage.mockClear();
 
@@ -371,7 +371,7 @@ describe("CommandHandler", () => {
 
     // And message for s2 should work
     await handler.handle({ type: "send_prompt", sessionId: "s2", text: "accepted" });
-    expect(pi.sendUserMessage).toHaveBeenCalledWith("accepted", { deliverAs: "followUp" });
+    expect(pi.sendUserMessage).toHaveBeenCalledWith("accepted", { deliverAs: "steer" });
   });
 
   describe("command routing", () => {
@@ -420,11 +420,11 @@ describe("CommandHandler", () => {
       const handler = createCommandHandler(pi as any, "s1");
 
       await handler.handle({ type: "send_prompt", sessionId: "s1", text: "!" });
-      expect(pi.sendUserMessage).toHaveBeenCalledWith("!", { deliverAs: "followUp" });
+      expect(pi.sendUserMessage).toHaveBeenCalledWith("!", { deliverAs: "steer" });
 
       pi.sendUserMessage.mockClear();
       await handler.handle({ type: "send_prompt", sessionId: "s1", text: "!!" });
-      expect(pi.sendUserMessage).toHaveBeenCalledWith("!!", { deliverAs: "followUp" });
+      expect(pi.sendUserMessage).toHaveBeenCalledWith("!!", { deliverAs: "steer" });
     });
 
     it("should route /compact to ctx.compact()", async () => {
@@ -603,7 +603,7 @@ describe("CommandHandler", () => {
 
       await handler.handle({ type: "send_prompt", sessionId: "s1", text: "explain this code" });
 
-      expect(pi.sendUserMessage).toHaveBeenCalledWith("explain this code", { deliverAs: "followUp" });
+      expect(pi.sendUserMessage).toHaveBeenCalledWith("explain this code", { deliverAs: "steer" });
     });
 
     it("should handle bash execution with non-zero exit code", async () => {

@@ -791,11 +791,12 @@ function initBridge(pi: ExtensionAPI) {
       if (handled) return;
 
       // Fallback: send as user message (template-expanded).
-      // Uses deliverAs:followUp so it queues properly when agent is streaming.
+      // Uses deliverAs:steer so messages sent while the agent is streaming
+      // behave like TUI steering instead of follow-up queueing.
       // expandPromptTemplateFromDisk handles skill commands (/skill:xxx) and
       // prompt templates by reading the file content from disk.
       const expanded = expandPromptTemplateFromDisk(text, process.cwd(), pi);
-      (pi.sendUserMessage as any)(expanded, { deliverAs: "followUp" });
+      (pi.sendUserMessage as any)(expanded, { deliverAs: "steer" });
     },
   });
 

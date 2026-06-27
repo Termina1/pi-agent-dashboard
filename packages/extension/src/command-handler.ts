@@ -502,13 +502,13 @@ export function createCommandHandler(
 }
 
 /** Send a user message with optional image validation.
- * Uses deliverAs: "followUp" so messages queue properly when the agent is streaming. */
+ * Uses deliverAs: "steer" so messages sent while the agent is streaming behave like TUI steering. */
 function sendUserMessageWithImages(
   pi: ExtensionAPI,
   text: string,
   images?: Array<{ type: string; data: string; mimeType: string }>,
 ): void {
-  const sendOptions = { deliverAs: "followUp" as const };
+  const sendOptions = { deliverAs: "steer" as const };
   if (images && images.length > 0) {
     const validMimeTypes = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
     const validImages = images.filter((img) => {
