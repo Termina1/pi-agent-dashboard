@@ -171,6 +171,7 @@ describe("ChatView", () => {
     const { getByTestId, container } = render(<ThemeProvider><ChatView state={state} toolContext={defaultToolContext} /></ThemeProvider>);
     const card = getByTestId("pending-prompt-card");
     expect(card).not.toBeNull();
+    expect(card.textContent).toContain("Sending to session…");
     expect(card.textContent).toContain("Fix the bug");
     // Should have animate-spin spinner
     const spinner = card.querySelector(".animate-spin");

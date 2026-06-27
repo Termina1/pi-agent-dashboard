@@ -109,23 +109,27 @@ export function useSessionActions(deps: SessionActionDeps) {
     });
   }, [send]);
 
+  const setPendingPrompt = useCallback((sessionId: string, text: string, images?: ImageContent[]) => {
+    setSessionStates((prev) => {
+      const next = new Map(prev);
+      const current = next.get(sessionId) ?? createInitialState();
+      next.set(sessionId, {
+        ...current,
+        pendingPrompt: {
+          text,
+          images: images?.map((img) => ({ data: img.data, mimeType: img.mimeType })),
+        },
+      });
+      return next;
+    });
+  }, [setSessionStates]);
+
   const handleSend = useCallback((text: string, images?: ImageContent[]) => {
     if (selectedId) {
       send({ type: "send_prompt", sessionId: selectedId, text, images });
-      setSessionStates((prev) => {
-        const next = new Map(prev);
-        const current = next.get(selectedId) ?? createInitialState();
-        next.set(selectedId, {
-          ...current,
-          pendingPrompt: {
-            text,
-            images: images?.map((img) => ({ data: img.data, mimeType: img.mimeType })),
-          },
-        });
-        return next;
-      });
+      setPendingPrompt(selectedId, text, images);
     }
-  }, [selectedId, send, setSessionStates]);
+  }, [selectedId, send, setPendingPrompt]);
 
   const handleSelect = useCallback((id: string) => {
     navigate(`/session/${id}`);
@@ -147,8 +151,9 @@ export function useSessionActions(deps: SessionActionDeps) {
   const handleSendPromptToSession = useCallback(
     (sessionId: string, text: string, images?: ImageContent[]) => {
       send({ type: "send_prompt", sessionId, text, images });
+      setPendingPrompt(sessionId, text, images);
     },
-    [send],
+    [send, setPendingPrompt],
   );
 
   const handleResumeSession = useCallback((sessionId: string, mode: "continue" | "fork", entryId?: string) => {

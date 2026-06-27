@@ -487,7 +487,8 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
               <ImageAttachments images={state.pendingPrompt.images} />
             )}
             <div className="flex items-start gap-2">
-              <div className="flex-1">
+              <div className="flex-1 min-w-0">
+                <div className="mb-1 text-[10px] uppercase tracking-wide text-blue-300/80">Sending to session…</div>
                 <MarkdownContent content={state.pendingPrompt.text} />
               </div>
               <Icon path={mdiLoading} size={0.7} className="animate-spin text-blue-400 shrink-0 mt-0.5" />
