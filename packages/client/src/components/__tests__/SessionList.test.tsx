@@ -4,6 +4,7 @@ import React from "react";
 import { Router } from "wouter";
 import { memoryLocation } from "wouter/memory-location";
 import { SessionList, groupSessionsByDirectory } from "../SessionList.js";
+import { FolderActionBar } from "../FolderActionBar.js";
 import { ThemeProvider } from "../ThemeProvider.js";
 import type { DashboardSession } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 
@@ -49,6 +50,67 @@ function makeSession(overrides: Partial<DashboardSession> = {}): DashboardSessio
     ...overrides,
   };
 }
+
+describe("FolderActionBar Tools dropdown", () => {
+  function renderFolderActionBar() {
+    const parentClick = vi.fn();
+    const callbacks = {
+      onSpawnSession: vi.fn(),
+      onOpenTerminals: vi.fn(),
+      onOpenEditor: vi.fn(),
+      onOpenNativeEditor: vi.fn(),
+      onOpenPiResources: vi.fn(),
+    };
+
+    render(
+      <div data-testid="folder-shell" onClick={parentClick}>
+        <FolderActionBar
+          cwd="/home/user/project"
+          terminalCount={2}
+          nativeEditors={[]}
+          onSpawnSession={callbacks.onSpawnSession}
+          onOpenTerminals={callbacks.onOpenTerminals}
+          onOpenEditor={callbacks.onOpenEditor}
+          onOpenNativeEditor={callbacks.onOpenNativeEditor}
+          onOpenPiResources={callbacks.onOpenPiResources}
+        />
+      </div>,
+    );
+
+    return { parentClick, ...callbacks };
+  }
+
+  it("does not bubble the Tools trigger click to the folder header", () => {
+    const { parentClick } = renderFolderActionBar();
+
+    fireEvent.click(screen.getByRole("button", { name: /tools/i }));
+
+    expect(parentClick).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu")).toBeTruthy();
+  });
+
+  it("closes when clicking outside the Tools dropdown", () => {
+    renderFolderActionBar();
+
+    fireEvent.click(screen.getByRole("button", { name: /tools/i }));
+    expect(screen.getByRole("menu")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("tools-dropdown-backdrop"));
+
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("does not bubble menu item clicks to the folder header", () => {
+    const { parentClick, onOpenTerminals } = renderFolderActionBar();
+
+    fireEvent.click(screen.getByRole("button", { name: /tools/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /terminals/i }));
+
+    expect(onOpenTerminals).toHaveBeenCalledOnce();
+    expect(parentClick).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
 
 describe("SessionList spawn button", () => {
   it("should render spawn button on folder card when onSpawnSession is provided", () => {

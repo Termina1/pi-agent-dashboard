@@ -51,7 +51,14 @@ export function FolderActionBar({
   onOpenNativeEditor,
   onOpenPiResources,
 }: Props) {
+  const [toolsOpen, setToolsOpen] = React.useState(false);
   const filteredNativeEditors = nativeEditors.filter((e) => e.id !== "vscode" && e.id !== "code");
+
+  function runToolsAction(event: React.MouseEvent<HTMLButtonElement>, action: () => void) {
+    event.stopPropagation();
+    setToolsOpen(false);
+    action();
+  }
 
   return (
     <div className="flex items-center gap-2">
@@ -84,76 +91,119 @@ export function FolderActionBar({
       )}
 
       {/* Tools dropdown — desktop only */}
-      <details className="hidden md:block relative ml-auto">
-        <summary className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] bg-[var(--bg-surface)] cursor-pointer transition-colors list-none">
+      <div
+        className="hidden md:block relative ml-auto"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            setToolsOpen(false);
+          }
+        }}
+      >
+        {toolsOpen && (
+          <div
+            aria-hidden="true"
+            className="fixed inset-0 z-40 cursor-default"
+            data-testid="tools-dropdown-backdrop"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              setToolsOpen(false);
+            }}
+          />
+        )}
+        <button
+          type="button"
+          aria-expanded={toolsOpen}
+          aria-haspopup="menu"
+          className="relative z-50 flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] bg-[var(--bg-surface)] cursor-pointer transition-colors"
+          onClick={(e) => {
+            e.stopPropagation();
+            setToolsOpen((open) => !open);
+          }}
+        >
           Tools <span className="text-[10px]">▾</span>
-        </summary>
-        <div className="absolute right-0 top-full mt-1 w-52 bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-lg shadow-lg shadow-[var(--shadow-card)] flex flex-col py-1.5 z-10">
-          {/* Terminals */}
-          <button
-            onClick={(e) => { e.stopPropagation(); onOpenTerminals(); }}
-            className="flex items-center justify-between px-3 py-1.5 text-[13px] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
+        </button>
+        {toolsOpen && (
+          <div
+            role="menu"
+            className="absolute right-0 top-full mt-1 w-52 bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-lg shadow-lg shadow-[var(--shadow-card)] flex flex-col py-1.5 z-50"
           >
-            <span className="flex items-center gap-2">
-              <Icon path={mdiConsoleLine} size={0.55} className="text-[var(--text-tertiary)]" />
-              Terminals
-            </span>
-            <span className="text-[11px] text-[var(--text-secondary)] font-medium">{terminalCount}</span>
-          </button>
-
-          {/* Editor */}
-          <button
-            onClick={(e) => { e.stopPropagation(); onOpenEditor(); }}
-            className="flex items-center justify-between px-3 py-1.5 text-[13px] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
-          >
-            <span className="flex items-center gap-2">
-              <Icon path={mdiCodeBraces} size={0.55} className="text-[var(--text-tertiary)]" />
-              Editor
-              {editorAvailable === false && (
-                <Icon path={mdiAlertCircleOutline} size={0.45} className="text-yellow-400" />
-              )}
-            </span>
-            {editorStatus?.status === "ready" && (
-              <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-            )}
-            {editorStatus?.status === "starting" && (
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-            )}
-          </button>
-
-          {/* Native editors */}
-          {filteredNativeEditors.map((editor) => (
+            {/* Terminals */}
             <button
-              key={editor.id}
-              onClick={(e) => { e.stopPropagation(); onOpenNativeEditor(editor.id); }}
+              type="button"
+              role="menuitem"
+              onClick={(e) => runToolsAction(e, onOpenTerminals)}
               className="flex items-center justify-between px-3 py-1.5 text-[13px] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
             >
               <span className="flex items-center gap-2">
-                {editorIcons[editor.id] ? (
-                  <span className="text-[13px] font-bold text-[var(--text-tertiary)]">{editorIcons[editor.id]}</span>
-                ) : (
-                  <Icon path={mdiOpenInNew} size={0.55} className="text-[var(--text-tertiary)]" />
-                )}
-                {editor.name}
+                <Icon path={mdiConsoleLine} size={0.55} className="text-[var(--text-tertiary)]" />
+                Terminals
               </span>
+              <span className="text-[11px] text-[var(--text-secondary)] font-medium">{terminalCount}</span>
             </button>
-          ))}
 
-          <div className="h-px bg-[var(--border-subtle)] my-1.5 mx-2" />
+            {/* Editor */}
+            <button
+              type="button"
+              role="menuitem"
+              onClick={(e) => runToolsAction(e, onOpenEditor)}
+              className="flex items-center justify-between px-3 py-1.5 text-[13px] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
+            >
+              <span className="flex items-center gap-2">
+                <Icon path={mdiCodeBraces} size={0.55} className="text-[var(--text-tertiary)]" />
+                Editor
+                {editorAvailable === false && (
+                  <Icon path={mdiAlertCircleOutline} size={0.45} className="text-yellow-400" />
+                )}
+              </span>
+              {editorStatus?.status === "ready" && (
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+              )}
+              {editorStatus?.status === "starting" && (
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+              )}
+            </button>
 
-          {/* Pi Resources */}
-          <button
-            onClick={(e) => { e.stopPropagation(); onOpenPiResources(); }}
-            className="flex items-center justify-between px-3 py-1.5 text-[13px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
-          >
-            <span className="flex items-center gap-2">
-              <Icon path={mdiToyBrickOutline} size={0.55} className="text-[var(--text-tertiary)]" />
-              Pi Resources
-            </span>
-            <span className="text-[10px] text-[var(--text-tertiary)]">↗</span>
-          </button>
-        </div>
-      </details>
+            {/* Native editors */}
+            {filteredNativeEditors.map((editor) => (
+              <button
+                type="button"
+                role="menuitem"
+                key={editor.id}
+                onClick={(e) => runToolsAction(e, () => onOpenNativeEditor(editor.id))}
+                className="flex items-center justify-between px-3 py-1.5 text-[13px] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
+              >
+                <span className="flex items-center gap-2">
+                  {editorIcons[editor.id] ? (
+                    <span className="text-[13px] font-bold text-[var(--text-tertiary)]">{editorIcons[editor.id]}</span>
+                  ) : (
+                    <Icon path={mdiOpenInNew} size={0.55} className="text-[var(--text-tertiary)]" />
+                  )}
+                  {editor.name}
+                </span>
+              </button>
+            ))}
+
+            <div className="h-px bg-[var(--border-subtle)] my-1.5 mx-2" />
+
+            {/* Pi Resources */}
+            <button
+              type="button"
+              role="menuitem"
+              onClick={(e) => runToolsAction(e, onOpenPiResources)}
+              className="flex items-center justify-between px-3 py-1.5 text-[13px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
+            >
+              <span className="flex items-center gap-2">
+                <Icon path={mdiToyBrickOutline} size={0.55} className="text-[var(--text-tertiary)]" />
+                Pi Resources
+              </span>
+              <span className="text-[10px] text-[var(--text-tertiary)]">↗</span>
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
