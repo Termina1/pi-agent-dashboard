@@ -23,20 +23,26 @@ import type { EventForwardMessage } from "./protocol.js";
  * pi 0.69+, where the bridge sees `message_start` before pi has assigned
  * the entry id. Replay has no such gap.
  */
-/**
- * @param knownContextWindow Optional override for the context window size,
- *   typically `session.contextWindow` from `.meta.json` (which was persisted
- *   from a live `turn_end` event). When provided, it is used in place of the
- *   `inferContextWindow(modelId)` heuristic for every synthesized
- *   `stats_update` event. The heuristic ignores Sonnet's 1M variant and
- *   pins Claude to 200k, so passing the persisted value avoids a brief
- *   200k flicker on reload before the next live `turn_end` arrives.
- */
+export interface ReplayEntriesOptions {
+  /**
+   * Optional override for the context window size, typically
+   * `session.contextWindow` from `.meta.json` (persisted from live `turn_end`).
+   */
+  knownContextWindow?: number;
+  /**
+   * Whether replay should synthesize `tool_execution_end` for tool calls that
+   * have no persisted tool result. Cold ended-session replay wants this; live
+   * bridge reattach does not, because the tool may still be running.
+   */
+  closeOpenToolCalls?: boolean;
+}
+
 export function replayEntriesAsEvents(
   sessionId: string,
   entries: any[],
-  knownContextWindow?: number,
+  optionsOrKnownContextWindow?: number | ReplayEntriesOptions,
 ): EventForwardMessage[] {
+  const options = normalizeReplayOptions(optionsOrKnownContextWindow);
   const messages: EventForwardMessage[] = [];
   const openToolCalls = new Set<string>(); // track tool calls without results
 
@@ -96,7 +102,7 @@ export function replayEntriesAsEvents(
           if (totalTokens && totalTokens > 0) {
             statsData.contextUsage = {
               tokens: totalTokens,
-              contextWindow: knownContextWindow ?? inferContextWindow(currentModel),
+              contextWindow: options.knownContextWindow ?? inferContextWindow(currentModel),
             };
           }
           messages.push(makeEvent(sessionId, "stats_update", ts, statsData));
@@ -142,21 +148,35 @@ export function replayEntriesAsEvents(
     }
   }
 
-  // Close any orphaned tool calls (agent killed mid-execution)
-  for (const toolCallId of openToolCalls) {
-    const startEvent = messages.find(
-      (m) => m.event.eventType === "tool_execution_start" && (m.event.data as any).toolCallId === toolCallId,
-    );
-    const ts = startEvent ? startEvent.event.timestamp : Date.now();
-    messages.push(makeEvent(sessionId, "tool_execution_end", ts, {
-      toolCallId,
-      toolName: (startEvent?.event.data as any)?.toolName ?? "unknown",
-      result: "",
-      isError: false,
-    }));
+  // Close any orphaned tool calls (agent killed mid-execution). Live bridge
+  // reattach disables this so long-running tools, such as Plannotator review,
+  // stay visibly running across dashboard restarts.
+  if (options.closeOpenToolCalls) {
+    for (const toolCallId of openToolCalls) {
+      const startEvent = messages.find(
+        (m) => m.event.eventType === "tool_execution_start" && (m.event.data as any).toolCallId === toolCallId,
+      );
+      const ts = startEvent ? startEvent.event.timestamp : Date.now();
+      messages.push(makeEvent(sessionId, "tool_execution_end", ts, {
+        toolCallId,
+        toolName: (startEvent?.event.data as any)?.toolName ?? "unknown",
+        result: "",
+        isError: false,
+      }));
+    }
   }
 
   return messages;
+}
+
+function normalizeReplayOptions(optionsOrKnownContextWindow?: number | ReplayEntriesOptions): { knownContextWindow?: number; closeOpenToolCalls: boolean } {
+  if (typeof optionsOrKnownContextWindow === "number") {
+    return { knownContextWindow: optionsOrKnownContextWindow, closeOpenToolCalls: true };
+  }
+  return {
+    knownContextWindow: optionsOrKnownContextWindow?.knownContextWindow,
+    closeOpenToolCalls: optionsOrKnownContextWindow?.closeOpenToolCalls ?? true,
+  };
 }
 
 function makeEvent(

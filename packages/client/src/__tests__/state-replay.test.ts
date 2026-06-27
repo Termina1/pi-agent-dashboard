@@ -241,6 +241,32 @@ describe("replayEntriesAsEvents", () => {
     expect((endEvent!.event.data as any).toolName).toBe("bash");
   });
 
+  it("should keep orphaned tool calls open when replaying a live bridge reattach", () => {
+    const entries = [
+      {
+        type: "message", id: "e1", parentId: null,
+        timestamp: "2025-01-01T00:00:00Z",
+        message: { role: "user", content: [{ type: "text", text: "Submit plan" }] },
+      },
+      {
+        type: "message", id: "e2", parentId: "e1",
+        timestamp: "2025-01-01T00:00:01Z",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "tc-plan", name: "plannotator_submit_plan", arguments: { filePath: "PLAN.md" } },
+          ],
+        },
+      },
+      // No toolResult yet — Plannotator is still waiting for approve/deny.
+    ];
+
+    const events = replayEntriesAsEvents("sess-1", entries, { closeOpenToolCalls: false });
+    const types = events.map((e) => e.event.eventType);
+    expect(types).toContain("tool_execution_start");
+    expect(types).not.toContain("tool_execution_end");
+  });
+
   it("should handle a full conversation sequence", () => {
     const entries = [
       {

@@ -95,7 +95,7 @@ export function replaySessionEntries(bc: BridgeContext): void {
   try {
     const entries = bc.cachedCtx?.sessionManager?.getBranch?.();
     if (!entries || entries.length === 0) return;
-    const events = replayEntriesAsEvents(bc.sessionId, entries);
+    const events = replayEntriesAsEvents(bc.sessionId, entries, { closeOpenToolCalls: false });
     for (const msg of events) {
       bc.connection.send(msg);
     }
