@@ -45,7 +45,7 @@ import { registerShowImageTool } from "./show-image-tool.js";
 import { registerShowFileTool } from "./show-file-tool.js";
 import { decodeMultiselectAnswer } from "./multiselect-decode.js";
 import { activate as activateProviderRegister, onProviderChanged, reloadProviders, buildProviderCatalogue } from "./provider-register.js";
-import type { FlowInfo } from "@blackbelt-technology/pi-dashboard-shared/types.js";
+import type { FlowInfo, PlannotatorPhase } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 import { startMetricsMonitor, stopMetricsMonitor, collectMetrics } from "./process-metrics.js";
 import { scanChildProcesses } from "./process-scanner.js";
 import type { BridgeContext } from "./bridge-context.js";
@@ -60,6 +60,9 @@ import { inlineMessageText, type ReadFileOutcome } from "./markdown-image-inline
 const HEARTBEAT_INTERVAL = 15_000;
 const GIT_POLL_INTERVAL = 30_000;
 const PROCESS_SCAN_INTERVAL = 10_000;
+const PLANNOTATOR_STATUS_POLL_INTERVAL = 5_000;
+const PLANNOTATOR_CONTEXT_RETRY_INTERVAL = 1_000;
+const PLANNOTATOR_UNAVAILABLE_RETRY_INTERVAL = 30_000;
 const PLANNOTATOR_REQUEST_CHANNEL = "plannotator:request";
 const PLANNOTATOR_DASHBOARD_TIMEOUT_MS = 5_000;
 
@@ -75,19 +78,34 @@ function emitCommandFeedback(connection: ConnectionManager, sessionId: string, c
   });
 }
 
-async function requestPlannotatorPlanMode(pi: ExtensionAPI, mode: "enter" | "exit" | "toggle" | "status"): Promise<{ phase?: string }> {
-  if (!pi.events?.emit) throw new Error("Pi event bus is unavailable.");
+function normalizePlannotatorPhase(value: unknown): PlannotatorPhase | undefined {
+  return value === "idle" || value === "planning" || value === "executing" ? value : undefined;
+}
+
+async function requestPlannotatorPlanMode(
+  pi: ExtensionAPI,
+  mode: "enter" | "exit" | "toggle" | "status",
+  emitOverride?: (channel: string, data: unknown) => void,
+): Promise<{ phase?: PlannotatorPhase }> {
+  if (!pi.events?.emit && !emitOverride) throw new Error("Pi event bus is unavailable.");
+  const emit = emitOverride ?? pi.events!.emit.bind(pi.events);
   const requestId = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
   return await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Timed out waiting for Plannotator plan-mode response.")), PLANNOTATOR_DASHBOARD_TIMEOUT_MS);
-    pi.events.emit(PLANNOTATOR_REQUEST_CHANNEL, {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      settled = true;
+      reject(new Error("Timed out waiting for Plannotator plan-mode response."));
+    }, PLANNOTATOR_DASHBOARD_TIMEOUT_MS);
+    emit(PLANNOTATOR_REQUEST_CHANNEL, {
       requestId,
       action: "plan-mode",
       payload: { mode },
       respond: (response: any) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timeout);
         if (response?.status === "handled") {
-          resolve(response.result ?? {});
+          resolve({ phase: normalizePlannotatorPhase(response.result?.phase) });
           return;
         }
         reject(new Error(response?.error || "Plannotator plan-mode request was not handled."));
@@ -230,6 +248,7 @@ function initBridge(pi: ExtensionAPI) {
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let gitPollTimer: ReturnType<typeof setInterval> | null = null;
   let processScanTimer: ReturnType<typeof setInterval> | null = null;
+  let plannotatorStatusTimer: ReturnType<typeof setInterval> | null = null;
   let previousProcessPids: string = ""; // JSON-stringified PID set for diff
   const trackedPgids = new Set<number>(); // PGIDs captured during bash tool calls
   let lastGitBranch: string | undefined;
@@ -242,6 +261,10 @@ function initBridge(pi: ExtensionAPI) {
   let lastThinkingLevel: string | undefined;
   let hasRegisteredOnce = false; // see change: reattach-move-to-front
   let promptBus: PromptBus | undefined;
+  let origEventsEmit: ((channel: string, data: unknown) => void) | undefined;
+  let lastPlannotatorStatusKey = "";
+  let plannotatorStatusInFlight = false;
+  let nextPlannotatorProbeAt = 0;
 
   // Provider-retry synthesis trackers. pi's ExtensionAPI does not expose
   // `auto_retry_*` events, so the bridge synthesizes them from observed
@@ -687,8 +710,52 @@ function initBridge(pi: ExtensionAPI) {
       // synchronous and re-runs the listener stack each call.
       // See change: add-extension-ui-modal.
       refreshUiModules(uiModulesBridgeCtx);
+      // Dashboard server lost in-memory session status on restart; query the
+      // live Plannotator phase again instead of trusting old UI state.
+      void sendPlannotatorStatus(true);
     }),
   });
+
+  function emitPlannotatorStatus(payload: { available: boolean; phase?: PlannotatorPhase; error?: string }, force = false): void {
+    if (!isActive() || !sessionReady) return;
+    const key = JSON.stringify(payload);
+    if (!force && key === lastPlannotatorStatusKey) return;
+    lastPlannotatorStatusKey = key;
+    connection.send({
+      type: "plannotator_status",
+      sessionId,
+      ...payload,
+    });
+  }
+
+  async function sendPlannotatorStatus(force = false): Promise<void> {
+    if (!isActive() || !sessionReady || plannotatorStatusInFlight) return;
+    const now = Date.now();
+    if (!force && now < nextPlannotatorProbeAt) return;
+    plannotatorStatusInFlight = true;
+    try {
+      const result = await requestPlannotatorPlanMode(pi, "status", origEventsEmit);
+      if (result.phase) {
+        nextPlannotatorProbeAt = Date.now() + PLANNOTATOR_STATUS_POLL_INTERVAL;
+        emitPlannotatorStatus({ available: true, phase: result.phase }, force);
+      } else {
+        nextPlannotatorProbeAt = Date.now() + PLANNOTATOR_UNAVAILABLE_RETRY_INTERVAL;
+        emitPlannotatorStatus({ available: false, error: "Plannotator returned no phase." }, force);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const retryMs = message.includes("context is not ready")
+        ? PLANNOTATOR_CONTEXT_RETRY_INTERVAL
+        : PLANNOTATOR_UNAVAILABLE_RETRY_INTERVAL;
+      nextPlannotatorProbeAt = Date.now() + retryMs;
+      emitPlannotatorStatus({
+        available: false,
+        error: message,
+      }, force);
+    } finally {
+      plannotatorStatusInFlight = false;
+    }
+  }
 
   // Track connection so future bridge incarnations can disconnect it
   getBridgeState().connections!.push(connection);
@@ -769,10 +836,13 @@ function initBridge(pi: ExtensionAPI) {
         if (cmdName === "plannotator") {
           emitCommandFeedback(connection, sessionId, text, "started");
           try {
-            const result = await requestPlannotatorPlanMode(pi, "toggle");
+            const result = await requestPlannotatorPlanMode(pi, "toggle", origEventsEmit);
+            if (result.phase) emitPlannotatorStatus({ available: true, phase: result.phase }, true);
+            else emitPlannotatorStatus({ available: false, error: "Plannotator returned no phase." }, true);
             const suffix = result.phase ? `Plannotator phase: ${result.phase}` : "Plannotator plan mode toggled.";
             emitCommandFeedback(connection, sessionId, text, "completed", suffix);
           } catch (err) {
+            emitPlannotatorStatus({ available: false, error: err instanceof Error ? err.message : String(err) }, true);
             emitCommandFeedback(connection, sessionId, text, "error", err instanceof Error ? err.message : String(err));
           }
           return;
@@ -1040,7 +1110,6 @@ function initBridge(pi: ExtensionAPI) {
   // traffic (flow events, subagent events, custom extension events).
   // Known channels get renamed via EVENT_BUS_MAP; unknown channels use the
   // channel name directly as the eventType.
-  let origEventsEmit: ((channel: string, data: unknown) => void) | undefined;
   if (pi.events) {
     origEventsEmit = pi.events.emit.bind(pi.events);
     pi.events.emit = (channel: string, data: unknown) => {
@@ -1399,6 +1468,8 @@ function initBridge(pi: ExtensionAPI) {
 
     // Allow event forwarding now that session_register is buffered
     sessionReady = true;
+    void sendPlannotatorStatus(true);
+    setTimeout(() => { void sendPlannotatorStatus(true); }, PLANNOTATOR_CONTEXT_RETRY_INTERVAL);
 
     // Replay full session history so the dashboard has all messages
     replaySessionEntries();
@@ -1566,6 +1637,12 @@ function initBridge(pi: ExtensionAPI) {
       }
     }, PROCESS_SCAN_INTERVAL);
     getBridgeState().timers!.push(processScanTimer);
+
+    if (plannotatorStatusTimer) clearInterval(plannotatorStatusTimer);
+    plannotatorStatusTimer = setInterval(() => {
+      void sendPlannotatorStatus(false);
+    }, PLANNOTATOR_STATUS_POLL_INTERVAL);
+    getBridgeState().timers!.push(plannotatorStatusTimer);
 
     // Register flow event listeners (pi-flows emits these via pi.events)
     registerFlowEventListeners(syncBc(), () => sessionReady, getFlowsList);

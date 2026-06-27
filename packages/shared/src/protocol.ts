@@ -1,7 +1,7 @@
 /**
  * Extension ↔ Server WebSocket protocol messages.
  */
-import type { DashboardEvent, CommandInfo, FlowInfo, SessionSource, ImageContent, FileEntry, TurnUsage, ContextUsage, ModelInfo, ProviderInfo, PiSessionInfo, OpenSpecPhase, RoleInfo, ExtensionUiModule, DecoratorDescriptor } from "./types.js";
+import type { DashboardEvent, CommandInfo, FlowInfo, SessionSource, ImageContent, FileEntry, TurnUsage, ContextUsage, ModelInfo, ProviderInfo, PiSessionInfo, OpenSpecPhase, RoleInfo, ExtensionUiModule, DecoratorDescriptor, PlannotatorPhase } from "./types.js";
 
 // ── Extension → Server ──────────────────────────────────────────────
 
@@ -257,6 +257,15 @@ export interface ProcessListMessage {
   processes: ProcessInfo[];
 }
 
+export interface PlannotatorStatusMessage {
+  type: "plannotator_status";
+  sessionId: string;
+  /** False means bridge could not verify live state; clients must not display OFF from this. */
+  available: boolean;
+  phase?: PlannotatorPhase;
+  error?: string;
+}
+
 // LoadSessionEventsResultMessage and LoadSessionEventsErrorMessage removed — server loads directly
 
 // ── Extension UI System (Phase 1) ──
@@ -337,6 +346,7 @@ export type ExtensionToServerMessage =
   | RolesListMessage
   | SpawnNewSessionMessage
   | ProcessListMessage
+  | PlannotatorStatusMessage
   | UiModulesListMessage
   | UiDataListMessage
   | ExtUiDecoratorMessage

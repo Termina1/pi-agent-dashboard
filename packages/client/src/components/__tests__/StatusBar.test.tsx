@@ -32,6 +32,47 @@ describe("StatusBar", () => {
     render(<StatusBar model="anthropic/claude-4" models={models} status="idle" onSelectModel={() => {}} onSelectThinkingLevel={() => {}} />);
     expect(screen.queryByTestId("working-status")).toBeNull();
   });
+
+  it("renders Plannotator status in the same wrapping bar as model controls", () => {
+    render(
+      <StatusBar
+        model="anthropic/claude-4"
+        models={models}
+        status="idle"
+        onSelectModel={() => {}}
+        onSelectThinkingLevel={() => {}}
+        plannotator={{ available: true, phase: "planning", updatedAt: 1234 }}
+      />,
+    );
+
+    const bar = screen.getByTestId("status-bar");
+    expect(bar.className).toContain("flex-wrap");
+    expect(screen.getByTestId("plannotator-mode-indicator").textContent).toContain("Plannotator ON");
+  });
+
+  it("shows unavailable instead of an endless checking state before bridge status arrives", () => {
+    render(<StatusBar model="anthropic/claude-4" models={models} status="idle" onSelectModel={() => {}} onSelectThinkingLevel={() => {}} />);
+
+    const text = screen.getByTestId("plannotator-mode-indicator").textContent ?? "";
+    expect(text).toContain("status unavailable");
+    expect(text).toContain("waiting for bridge");
+    expect(text).not.toContain("checking live state");
+  });
+
+  it("can hide the inline Plannotator pill for mobile layouts", () => {
+    render(
+      <StatusBar
+        model="anthropic/claude-4"
+        models={models}
+        status="idle"
+        onSelectModel={() => {}}
+        onSelectThinkingLevel={() => {}}
+        showPlannotator={false}
+      />,
+    );
+
+    expect(screen.queryByTestId("plannotator-mode-indicator")).toBeNull();
+  });
 });
 
 describe("ModelSelector", () => {

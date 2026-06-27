@@ -34,6 +34,52 @@ function getDropdownItems(container: HTMLElement): string[] {
   return items;
 }
 
+describe("Plannotator mode indicator", () => {
+  it("does not render in the input area when parent owns the desktop status bar", () => {
+    const { queryByTestId } = renderInput();
+    expect(queryByTestId("plannotator-mode-indicator")).toBeNull();
+  });
+
+  it("renders a live planning-mode indicator above the textarea", () => {
+    const { getByTestId, textarea } = renderInput({
+      plannotator: { available: true, phase: "planning", updatedAt: 1234 },
+    });
+
+    const indicator = getByTestId("plannotator-mode-indicator");
+    expect(indicator.textContent).toContain("Plannotator ON");
+    expect(indicator.textContent).toContain("planning mode");
+    expect(indicator.compareDocumentPosition(textarea) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("renders idle as explicitly off", () => {
+    const { getByTestId } = renderInput({
+      plannotator: { available: true, phase: "idle", updatedAt: 1234 },
+    });
+
+    expect(getByTestId("plannotator-mode-indicator").textContent).toContain("Plannotator OFF");
+  });
+
+  it("does not claim off when the live state cannot be verified", () => {
+    const { getByTestId } = renderInput({
+      plannotator: { available: false, error: "Timed out", updatedAt: 1234 },
+    });
+
+    const text = getByTestId("plannotator-mode-indicator").textContent ?? "";
+    expect(text).toContain("status unavailable");
+    expect(text).not.toContain("Plannotator OFF");
+  });
+
+  it("does not claim off when bridge omits a phase", () => {
+    const { getByTestId } = renderInput({
+      plannotator: { available: true, updatedAt: 1234 },
+    });
+
+    const text = getByTestId("plannotator-mode-indicator").textContent ?? "";
+    expect(text).toContain("phase missing");
+    expect(text).not.toContain("Plannotator OFF");
+  });
+});
+
 describe("CommandInput placeholder", () => {
   it("renders a one-line truncated overlay placeholder", () => {
     const { textarea, getByTestId } = renderInput();

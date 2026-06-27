@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } from "react";
 import { Icon } from "@mdi/react";
 import { mdiFlash, mdiClipboardText, mdiWrench, mdiFolder, mdiFile, mdiStop, mdiAlert, mdiConsole, mdiClose, mdiSend, mdiPaperclip } from "@mdi/js";
-import type { CommandInfo, ImageContent, FileEntry } from "@blackbelt-technology/pi-dashboard-shared/types.js";
+import type { CommandInfo, ImageContent, FileEntry, PlannotatorStatus } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 import { useImagePaste } from "../hooks/useImagePaste.js";
 import { ImagePreviewStrip } from "./ImagePreviewStrip.js";
 import { useMobile } from "../hooks/useMobile.js";
@@ -50,6 +50,8 @@ interface Props {
   images?: ImageContent[];
   /** Parent callback for every images-array change (controlled mode). */
   onImagesChange?: (next: ImageContent[]) => void;
+  /** Live Plannotator state reported by the bridge. Undefined means not checked yet. */
+  plannotator?: PlannotatorStatus;
 }
 
 /**
@@ -109,7 +111,114 @@ function extractAtQuery(text: string): string | null {
 
 type StopState = "idle" | "aborting" | "killing";
 
-export function CommandInput({ commands: externalCommands, onSend, onListFiles, fileResults, disabled, sessionStatus, retrying, onAbort, onForceKill, pendingPrompt, onCancelPending, sessionId, draft, onDraftChange, history, images, onImagesChange }: Props) {
+type PlannotatorTone = "unknown" | "off" | "planning" | "executing" | "unavailable";
+
+function formatPlannotatorUpdatedAt(updatedAt?: number): string | undefined {
+  if (!updatedAt) return undefined;
+  try {
+    return new Date(updatedAt).toLocaleTimeString();
+  } catch {
+    return undefined;
+  }
+}
+
+function getPlannotatorIndicator(plannotator: PlannotatorStatus | undefined, sessionStatus?: Props["sessionStatus"]): {
+  tone: PlannotatorTone;
+  label: string;
+  detail: string;
+  title: string;
+} {
+  const lastChecked = formatPlannotatorUpdatedAt(plannotator?.updatedAt);
+  const suffix = sessionStatus === "ended" ? " · last known" : "";
+  if (!plannotator) {
+    return {
+      tone: "unavailable",
+      label: "Plannotator status unavailable",
+      detail: `waiting for bridge${suffix}`,
+      title: "No live Plannotator phase has arrived from the bridge yet.",
+    };
+  }
+  if (!plannotator.available) {
+    return {
+      tone: "unavailable",
+      label: "Plannotator status unavailable",
+      detail: `cannot verify live state${suffix}`,
+      title: [plannotator.error, lastChecked ? `Last checked ${lastChecked}` : undefined].filter(Boolean).join(" · "),
+    };
+  }
+  if (plannotator.phase === "planning") {
+    return {
+      tone: "planning",
+      label: "Plannotator ON",
+      detail: `planning mode${suffix}`,
+      title: ["Live Plannotator phase: planning", lastChecked ? `Last checked ${lastChecked}` : undefined].filter(Boolean).join(" · "),
+    };
+  }
+  if (plannotator.phase === "executing") {
+    return {
+      tone: "executing",
+      label: "Plannotator ON",
+      detail: `executing approved plan${suffix}`,
+      title: ["Live Plannotator phase: executing", lastChecked ? `Last checked ${lastChecked}` : undefined].filter(Boolean).join(" · "),
+    };
+  }
+  if (plannotator.phase === "idle") {
+    return {
+      tone: "off",
+      label: "Plannotator OFF",
+      detail: `full access${suffix}`,
+      title: ["Live Plannotator phase: idle", lastChecked ? `Last checked ${lastChecked}` : undefined].filter(Boolean).join(" · "),
+    };
+  }
+  return {
+    tone: "unknown",
+    label: "Plannotator status",
+    detail: `phase missing${suffix}`,
+    title: ["Bridge reported Plannotator available but did not include a phase.", lastChecked ? `Last checked ${lastChecked}` : undefined].filter(Boolean).join(" · "),
+  };
+}
+
+const plannotatorToneClass: Record<PlannotatorTone, string> = {
+  unknown: "border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-secondary)]",
+  off: "border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-secondary)]",
+  planning: "border-yellow-500/50 bg-yellow-500/10 text-yellow-700 dark:text-yellow-200",
+  executing: "border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
+  unavailable: "border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-200",
+};
+
+const plannotatorDotClass: Record<PlannotatorTone, string> = {
+  unknown: "bg-[var(--text-tertiary)]",
+  off: "bg-[var(--text-tertiary)]",
+  planning: "bg-yellow-400 shadow-[0_0_12px_rgba(250,204,21,0.65)]",
+  executing: "bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.65)]",
+  unavailable: "bg-red-400 shadow-[0_0_12px_rgba(248,113,113,0.5)]",
+};
+
+export function PlannotatorModeIndicator({
+  plannotator,
+  sessionStatus,
+  className,
+}: {
+  plannotator?: PlannotatorStatus;
+  sessionStatus?: Props["sessionStatus"];
+  className?: string;
+}) {
+  const state = getPlannotatorIndicator(plannotator, sessionStatus);
+  return (
+    <div
+      data-testid="plannotator-mode-indicator"
+      className={`${className ?? "mb-2"} flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs ${plannotatorToneClass[state.tone]}`}
+      title={state.title}
+      aria-live="polite"
+    >
+      <span className={`h-2.5 w-2.5 rounded-full ${plannotatorDotClass[state.tone]}`} aria-hidden="true" />
+      <span className="font-semibold">{state.label}</span>
+      <span className="text-current/80">· {state.detail}</span>
+    </div>
+  );
+}
+
+export function CommandInput({ commands: externalCommands, onSend, onListFiles, fileResults, disabled, sessionStatus, retrying, onAbort, onForceKill, pendingPrompt, onCancelPending, sessionId, draft, onDraftChange, history, images, onImagesChange, plannotator }: Props) {
   // Treat retry-sleep as "still working" for Stop/Force-Stop visibility.
   const isWorking = sessionStatus === "streaming" || retrying === true;
   // Merge server commands with built-in commands, avoiding duplicates
@@ -527,6 +636,8 @@ export function CommandInput({ commands: externalCommands, onSend, onListFiles, 
           })}
         </div>
       )}
+
+      {plannotator && <PlannotatorModeIndicator plannotator={plannotator} sessionStatus={sessionStatus} />}
 
       {/* Pasted-image error banner + thumbnail strip (shared component). */}
       <ImagePreviewStrip images={pendingImages} error={imageError} onRemove={removeImage} />

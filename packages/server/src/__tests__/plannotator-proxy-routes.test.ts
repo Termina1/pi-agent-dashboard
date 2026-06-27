@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import compress from "@fastify/compress";
 import { createServer, type Server } from "node:http";
 import { registerPlannotatorProxyRoutes } from "../routes/plannotator-proxy-routes.js";
 
@@ -45,6 +46,31 @@ describe("Plannotator proxy routes", () => {
     expect(res.body).toContain('href="/plannotator/favicon.svg"');
     expect(res.body).toContain('fetch("/plannotator/api/plan")');
     expect(res.body).toContain("fetch(`/plannotator/api/draft`)");
+  });
+
+  it("does not let global compression turn the proxied HTML into an empty gzip response", async () => {
+    upstream = createServer((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.end(`<!doctype html><div>${"x".repeat(2000)}</div>`);
+    });
+    const targetPort = await listen(upstream);
+
+    app = Fastify({ logger: false });
+    await app.register(compress, { global: true, threshold: 1024, encodings: ["gzip", "deflate"] });
+    registerPlannotatorProxyRoutes(app, { networkGuard: async () => {}, targetPort });
+    await app.ready();
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/plannotator/",
+      headers: { "accept-encoding": "gzip" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-encoding"]).toBeUndefined();
+    expect(res.body).toContain("<!doctype html>");
+    expect(res.body.length).toBeGreaterThan(2000);
   });
 
   it("strips the proxy prefix and forwards JSON POST bodies", async () => {

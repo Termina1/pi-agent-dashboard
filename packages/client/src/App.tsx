@@ -1175,6 +1175,8 @@ export default function App() {
               send({ type: "role_preset_delete", sessionId: selectedId, presetName });
             }}
             bellState={selectedSession?.pushPrefs?.notifyCompletion ?? "off"}
+            plannotator={!isMobile ? selectedSession?.plannotator : undefined}
+            showPlannotator={!isMobile}
             onBellClick={() => {
               const states = ["off", "on", "auto"] as const;
               const current = selectedSession?.pushPrefs?.notifyCompletion ?? "off";
@@ -1201,6 +1203,7 @@ export default function App() {
             history={selectedHistory}
             images={selectedImages}
             onImagesChange={setImagesForSelected}
+            plannotator={isMobile ? selectedSession?.plannotator : undefined}
           />
           {/* Plugin slot: content-inline-footer (additive, coexists with FlowSummary until extract-flows-as-plugin) */}
           <ContentInlineFooterSlot session={sessions.get(selectedId)!} />

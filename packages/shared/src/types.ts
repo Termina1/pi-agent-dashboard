@@ -4,6 +4,19 @@ export type SessionSource = "tui" | "zed" | "tmux" | "dashboard" | "terminal" | 
 /** Current status of a session */
 export type SessionStatus = "active" | "idle" | "streaming" | "ended";
 
+export type PlannotatorPhase = "idle" | "planning" | "executing";
+
+export interface PlannotatorStatus {
+  /** False means the bridge could not verify live Plannotator state. UI must not treat this as off. */
+  available: boolean;
+  /** Live phase returned by Plannotator when available. */
+  phase?: PlannotatorPhase;
+  /** Server timestamp of the latest live status probe. */
+  updatedAt?: number;
+  /** Probe failure detail when available is false. */
+  error?: string;
+}
+
 /** A dashboard session representing a connected pi instance */
 export interface DashboardSession {
   id: string;
@@ -68,6 +81,8 @@ export interface DashboardSession {
   firstMessage?: string;
   dataUnavailable?: boolean;
   resuming?: boolean;
+  /** Live Plannotator plan-mode status reported by the bridge. */
+  plannotator?: PlannotatorStatus;
   /** Active flow name (set during flow execution) */
   activeFlowName?: string;
   /** Number of completed agents in the active flow */

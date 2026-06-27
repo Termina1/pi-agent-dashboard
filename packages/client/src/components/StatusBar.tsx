@@ -4,7 +4,8 @@ import { mdiLoading, mdiFlash } from "@mdi/js";
 import { ModelSelector } from "./ModelSelector.js";
 import { ThinkingLevelSelector } from "./ThinkingLevelSelector.js";
 import { BellToggle } from "./BellToggle.js";
-import type { ModelInfo, RoleInfo } from "@blackbelt-technology/pi-dashboard-shared/types.js";
+import { PlannotatorModeIndicator } from "./CommandInput.js";
+import type { ModelInfo, RoleInfo, PlannotatorStatus } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 
 interface Props {
   model?: string;
@@ -26,9 +27,13 @@ interface Props {
   onBellClick?: () => void;
   /** Whether push is enabled/configured. Bell hidden when false. */
   pushEnabled?: boolean;
+  /** Live Plannotator state; rendered inline with desktop model controls. */
+  plannotator?: PlannotatorStatus;
+  /** Hide inline Plannotator pill when another surface owns it (mobile input). */
+  showPlannotator?: boolean;
 }
 
-export function StatusBar({ model, models, roles, thinkingLevel, status, currentTool, streamingText, onSelectModel, onSelectThinkingLevel, onRoleSet, onPresetLoad, onPresetSave, onPresetDelete, bellState, onBellClick, pushEnabled }: Props) {
+export function StatusBar({ model, models, roles, thinkingLevel, status, currentTool, streamingText, onSelectModel, onSelectThinkingLevel, onRoleSet, onPresetLoad, onPresetSave, onPresetDelete, bellState, onBellClick, pushEnabled, plannotator, showPlannotator = true }: Props) {
   let statusLabel: string | null = null;
   let statusIcon = mdiLoading;
   let toolHighlight = false;
@@ -46,16 +51,17 @@ export function StatusBar({ model, models, roles, thinkingLevel, status, current
   }
 
   return (
-    <div className="flex items-center justify-between px-4 py-1 border-t border-[var(--border-primary)] text-xs" data-testid="status-bar">
-      <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-1 border-t border-[var(--border-primary)] text-xs" data-testid="status-bar">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
         <ModelSelector current={model} models={models} roles={roles} onSelect={onSelectModel} onRoleSet={onRoleSet} onPresetLoad={onPresetLoad} onPresetSave={onPresetSave} onPresetDelete={onPresetDelete} />
         <ThinkingLevelSelector current={thinkingLevel} onSelect={onSelectThinkingLevel} />
         {status !== "ended" && pushEnabled !== false && bellState && onBellClick && (
           <BellToggle state={bellState} onClick={onBellClick} />
         )}
+        {showPlannotator && <PlannotatorModeIndicator plannotator={plannotator} sessionStatus={status} className="mb-0 max-w-full flex-shrink-0" />}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2">
         {statusLabel && (
           <div className="flex items-center gap-1.5 text-[var(--text-secondary)]" data-testid="working-status">
             <Icon

@@ -162,7 +162,7 @@ export function registerPlannotatorProxyRoutes(
       (_request, body, done) => done(null, body),
     );
 
-    const routeOpts = { preHandler: deps.networkGuard, bodyLimit: MAX_PROXY_BODY_BYTES };
+    const routeOpts = { preHandler: deps.networkGuard, bodyLimit: MAX_PROXY_BODY_BYTES, config: { compress: false as const } };
     scope.all("/", routeOpts, handler);
     scope.all("/*", routeOpts, handler);
   }, { prefix: PLANNOTATOR_PROXY_PREFIX });

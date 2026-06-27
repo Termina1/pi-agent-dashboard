@@ -753,6 +753,17 @@ export function wireEvents(deps: EventWiringDeps): void {
       } as any);
     }
 
+    if (msg.type === "plannotator_status") {
+      const plannotator = {
+        available: msg.available === true,
+        ...(msg.phase ? { phase: msg.phase } : {}),
+        updatedAt: Date.now(),
+        ...(msg.error ? { error: msg.error } : {}),
+      };
+      sessionManager.update(sessionId, { plannotator });
+      browserGateway.broadcastSessionUpdated(sessionId, { plannotator });
+    }
+
     if (msg.type === "providers_list") {
       // Cache the bridge-pushed catalogue. Browsers don't subscribe to it
       // directly; they read via GET /api/provider-auth/status.
