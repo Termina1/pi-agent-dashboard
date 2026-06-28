@@ -17,7 +17,7 @@ import type { PushPrefs } from "./push/push-types.js";
 import { spawnPiSession } from "./process-manager.js";
 import { loadConfig, type PushDefaults } from "@blackbelt-technology/pi-dashboard-shared/config.js";
 import { writeSessionMeta } from "@blackbelt-technology/pi-dashboard-shared/session-meta.js";
-import type { DashboardSession } from "@blackbelt-technology/pi-dashboard-shared/types.js";
+import type { DashboardEvent, DashboardSession, SessionStatus } from "@blackbelt-technology/pi-dashboard-shared/types.js";
 import { detectOpenSpecActivity, isValidOpenSpecChangeSlug } from "@blackbelt-technology/pi-dashboard-shared/openspec-activity-detector.js";
 import { extractTurnStats } from "@blackbelt-technology/pi-dashboard-shared/stats-extractor.js";
 import { attachRenameTarget, isNameAutoSetFromAttachment } from "./proposal-attach-naming.js";
@@ -95,6 +95,11 @@ export function wireEvents(deps: EventWiringDeps): void {
     snapshotPrewarmQueue,
   } = deps;
 
+  // Compaction can be triggered by a user slash-command or internally by pi
+  // mid-turn. Remember the status before compaction so `session_compact` can
+  // clear the pseudo-tool without turning an already-streaming agent idle.
+  const statusBeforeCompaction = new Map<string, SessionStatus | undefined>();
+
   // Broadcast placeholder session to browsers when auto-created from early events
   piGateway.onSessionCreated = (sessionId) => {
     const session = sessionManager.get(sessionId);
@@ -132,6 +137,7 @@ export function wireEvents(deps: EventWiringDeps): void {
 
   // Broadcast session ended to browsers when sessions are unregistered
   sessionManager.onUnregister = (sessionId) => {
+    statusBeforeCompaction.delete(sessionId);
     const session = sessionManager.get(sessionId);
     if (session) {
       browserGateway.broadcastSessionUpdated(sessionId, {
@@ -161,6 +167,21 @@ export function wireEvents(deps: EventWiringDeps): void {
   const lastActivityBroadcastAt = new Map<string, number>();
   const LAST_ACTIVITY_BROADCAST_INTERVAL_MS = 30_000;
 
+  function extractSessionUpdatesWithContext(sessionId: string, event: DashboardEvent) {
+    if (event.eventType === "session_before_compact" && !statusBeforeCompaction.has(sessionId)) {
+      statusBeforeCompaction.set(sessionId, sessionManager.get(sessionId)?.status);
+    }
+    const updates = extractSessionUpdates(event, {
+      statusBeforeCompaction: event.eventType === "session_compact"
+        ? statusBeforeCompaction.get(sessionId)
+        : undefined,
+    });
+    if (event.eventType === "session_compact") {
+      statusBeforeCompaction.delete(sessionId);
+    }
+    return updates;
+  }
+
   piGateway.onEvent = (sessionId, msg) => {
     if (msg.type === "event_forward") {
       // DEBUG DUMP: log message_update events carrying thinking_* assistantMessageEvent
@@ -176,7 +197,7 @@ export function wireEvents(deps: EventWiringDeps): void {
       // don't insert replayed events again (would cause exponential duplication)
       if (replayingSessions.has(sessionId) && skipReplayInsert.has(sessionId)) {
         // Still process status updates so session state stays accurate
-        const updates = extractSessionUpdates(msg.event);
+        const updates = extractSessionUpdatesWithContext(sessionId, msg.event);
         if (updates) {
           if (updates.flowAgentsDone === -1) {
             const session = sessionManager.get(sessionId);
@@ -205,7 +226,7 @@ export function wireEvents(deps: EventWiringDeps): void {
         currentTool: sessionBefore?.currentTool,
       };
 
-      const updates = extractSessionUpdates(msg.event);
+      const updates = extractSessionUpdatesWithContext(sessionId, msg.event);
       if (updates) {
         if (updates.flowAgentsDone === -1) {
           const session = sessionManager.get(sessionId);

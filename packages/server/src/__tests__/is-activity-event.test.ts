@@ -17,6 +17,8 @@ describe("isActivityEvent", () => {
       "agent_start",
       "agent_end",
       "bash_output",
+      "session_before_compact",
+      "session_compact",
       "flow_started",
       "flow_complete",
       "flow_agent_started",

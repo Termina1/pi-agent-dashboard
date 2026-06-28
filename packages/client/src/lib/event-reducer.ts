@@ -142,6 +142,8 @@ export interface SessionState {
     reason: string;
     startedAt: number;
   };
+  /** Status captured before `session_before_compact`, restored on `session_compact`. */
+  statusBeforeCompaction?: SessionState["status"];
   /**
    * True iff the current assistant message has already had its streaming
    * text flushed into messages[] via flushStreamingTextAsAssistantRow.
@@ -749,6 +751,14 @@ export function reduceEvent(state: SessionState, event: DashboardEvent): Session
       break;
     }
 
+    case "session_before_compact":
+      next.statusBeforeCompaction = state.statusBeforeCompaction ?? state.status;
+      next.isStreaming = true;
+      next.status = "streaming";
+      next.currentTool = "Compaction";
+      next.pendingPrompt = undefined;
+      break;
+
     case "auto_retry_start": {
       const attempt = typeof data.attempt === "number" ? data.attempt : 1;
       const maxAttempts = typeof data.maxAttempts === "number" ? data.maxAttempts : 1;
@@ -1210,6 +1220,13 @@ export function reduceEvent(state: SessionState, event: DashboardEvent): Session
     }
 
     case "session_compact": {
+      const restoredStatus = state.statusBeforeCompaction;
+      if (restoredStatus) {
+        next.status = restoredStatus;
+        next.isStreaming = restoredStatus === "streaming";
+      }
+      next.currentTool = undefined;
+      next.statusBeforeCompaction = undefined;
       next.messages = [
         ...next.messages,
         {

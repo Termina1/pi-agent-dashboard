@@ -1076,6 +1076,62 @@ describe("bash_output events", () => {
   });
 });
 
+describe("compaction events", () => {
+  it("should mark session_before_compact as a running compaction without rendering raw JSON", () => {
+    const state = reduceEvent(createInitialState(), {
+      eventType: "session_before_compact",
+      timestamp: 1000,
+      data: { type: "session_before_compact" },
+    });
+
+    expect(state.status).toBe("streaming");
+    expect(state.isStreaming).toBe(true);
+    expect(state.currentTool).toBe("Compaction");
+    expect(state.messages).toHaveLength(0);
+  });
+
+  it("should restore idle status and render compacted marker when compaction finishes", () => {
+    let state = reduceEvent(createInitialState(), {
+      eventType: "session_before_compact",
+      timestamp: 1000,
+      data: { type: "session_before_compact" },
+    });
+    state = reduceEvent(state, {
+      eventType: "session_compact",
+      timestamp: 2000,
+      data: { type: "session_compact" },
+    });
+
+    expect(state.status).toBe("idle");
+    expect(state.isStreaming).toBe(false);
+    expect(state.currentTool).toBeUndefined();
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0].content).toBe("── Session compacted ──");
+  });
+
+  it("should keep an existing streaming turn streaming after mid-turn compaction", () => {
+    let state = reduceEvent(createInitialState(), {
+      eventType: "agent_start",
+      timestamp: 900,
+      data: { type: "agent_start" },
+    });
+    state = reduceEvent(state, {
+      eventType: "session_before_compact",
+      timestamp: 1000,
+      data: { type: "session_before_compact" },
+    });
+    state = reduceEvent(state, {
+      eventType: "session_compact",
+      timestamp: 2000,
+      data: { type: "session_compact" },
+    });
+
+    expect(state.status).toBe("streaming");
+    expect(state.isStreaming).toBe(true);
+    expect(state.currentTool).toBeUndefined();
+  });
+});
+
 describe("command_feedback events", () => {
   it("should add commandFeedback message from command_feedback event", () => {
     const state = applyEvents([

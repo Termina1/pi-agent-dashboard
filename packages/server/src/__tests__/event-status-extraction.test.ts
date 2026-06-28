@@ -27,6 +27,26 @@ describe("extractSessionUpdates", () => {
     expect(updates).toEqual({ currentTool: null });
   });
 
+  it("should mark compaction as an active pseudo-tool", () => {
+    const updates = extractSessionUpdates(makeEvent("session_before_compact"));
+    expect(updates).toEqual({ status: "streaming", currentTool: "Compaction" });
+  });
+
+  it("should restore the pre-compaction status when compaction finishes", () => {
+    const updates = extractSessionUpdates(makeEvent("session_compact"), { statusBeforeCompaction: "idle" });
+    expect(updates).toEqual({ status: "idle", currentTool: null });
+  });
+
+  it("should keep a streaming turn streaming when mid-turn compaction finishes", () => {
+    const updates = extractSessionUpdates(makeEvent("session_compact"), { statusBeforeCompaction: "streaming" });
+    expect(updates).toEqual({ status: "streaming", currentTool: null });
+  });
+
+  it("should clear stale compaction tool state if finish arrives without a remembered start", () => {
+    const updates = extractSessionUpdates(makeEvent("session_compact"));
+    expect(updates).toEqual({ currentTool: null });
+  });
+
   it("should extract model from model_select event", () => {
     const updates = extractSessionUpdates(
       makeEvent("model_select", {
@@ -52,7 +72,6 @@ describe("extractSessionUpdates", () => {
 
   it("should return null for unrelated events", () => {
     expect(extractSessionUpdates(makeEvent("message_update"))).toBeNull();
-    expect(extractSessionUpdates(makeEvent("session_compact"))).toBeNull();
     expect(extractSessionUpdates(makeEvent("turn_start"))).toBeNull();
   });
 });

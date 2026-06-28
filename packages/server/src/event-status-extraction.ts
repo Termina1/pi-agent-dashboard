@@ -24,6 +24,11 @@ type SessionUpdates = Partial<Pick<DashboardSession, "status" | "model" | "think
   flowStatus?: FlowStatus | null;
 };
 
+export interface SessionUpdateContext {
+  /** Session status captured immediately before `session_before_compact`. */
+  statusBeforeCompaction?: SessionStatus;
+}
+
 /**
  * Accumulate token/cost stats from a batch of events (e.g. loaded from disk).
  * Returns partial session updates with totals, or null if no stats found.
@@ -66,7 +71,7 @@ export function extractStatsFromEvents(
   return updates;
 }
 
-export function extractSessionUpdates(event: DashboardEvent): SessionUpdates | null {
+export function extractSessionUpdates(event: DashboardEvent, context: SessionUpdateContext = {}): SessionUpdates | null {
   switch (event.eventType) {
     case "agent_start":
       return { status: "streaming", currentTool: null };
@@ -79,6 +84,17 @@ export function extractSessionUpdates(event: DashboardEvent): SessionUpdates | n
 
     case "tool_execution_end":
       return { currentTool: null };
+
+    case "session_before_compact":
+      return { status: "streaming", currentTool: "Compaction" };
+
+    case "session_compact": {
+      const updates: SessionUpdates = { currentTool: null };
+      if (context.statusBeforeCompaction) {
+        updates.status = context.statusBeforeCompaction;
+      }
+      return updates;
+    }
 
     case "model_select": {
       const model = event.data.model as { provider?: string; id?: string } | undefined;
@@ -174,6 +190,9 @@ const ACTIVITY_EVENT_TYPES: ReadonlySet<string> = new Set([
   "agent_end",
   // Bash command output
   "bash_output",
+  // Compaction lifecycle
+  "session_before_compact",
+  "session_compact",
   // Flow lifecycle / agent steps
   "flow_started",
   "flow_complete",
